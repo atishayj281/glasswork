@@ -1,0 +1,145 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-bg: #0a0e17;
+    --color-surface: rgba(15, 23, 42, 0.6);
+    --color-border: rgba(34, 211, 238, 0.2);
+    --color-text: #e2e8f0;
+    --color-text-muted: #94a3b8;
+    --color-accent: #22d3ee;
+  }
+
+  body {
+    margin: 0;
+    font-family: "Exo 2", system-ui, sans-serif;
+    background: var(--color-bg);
+    color: var(--color-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(34, 211, 238, 0.3) rgba(15, 23, 42, 0.5);
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.5);
+    border-radius: 3px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgba(34, 211, 238, 0.3);
+    border-radius: 3px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(34, 211, 238, 0.5);
+  }
+}
+
+@layer components {
+  .grid-bg {
+    background-color: #0a0e17;
+    background-image:
+      radial-gradient(ellipse at 20% 0%, rgba(34, 211, 238, 0.12) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 100%, rgba(167, 139, 250, 0.1) 0%, transparent 50%),
+      linear-gradient(rgba(34, 211, 238, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(34, 211, 238, 0.03) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+  }
+
+  .glass-panel {
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(34, 211, 238, 0.15);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  .glass-card {
+    background: rgba(30, 41, 59, 0.4);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(34, 211, 238, 0.12);
+    border-radius: 0.75rem;
+  }
+
+  .neon-border {
+    border: 1px solid rgba(34, 211, 238, 0.25);
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  .neon-border:hover,
+  .neon-border:focus-within {
+    border-color: rgba(34, 211, 238, 0.5);
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.2);
+  }
+
+  .neon-glow {
+    box-shadow: 0 0 16px rgba(34, 211, 238, 0.3);
+  }
+
+  .gradient-text {
+    background: linear-gradient(135deg, #22d3ee 0%, #3b82f6 50%, #a78bfa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .shimmer-bg {
+    background: linear-gradient(
+      90deg,
+      rgba(34, 211, 238, 0.05) 0%,
+      rgba(34, 211, 238, 0.15) 50%,
+      rgba(34, 211, 238, 0.05) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2s linear infinite;
+  }
+
+  .section-divider {
+    border-color: rgba(34, 211, 238, 0.12);
+  }
+}
+
+/* React Flow dark theme overrides */
+.react-flow__controls {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+}
+
+.react-flow__controls-button {
+  background: rgba(15, 23, 42, 0.85) !important;
+  border-color: rgba(34, 211, 238, 0.25) !important;
+  color: #94a3b8 !important;
+  fill: #94a3b8 !important;
+}
+
+.react-flow__controls-button:hover {
+  background: rgba(30, 41, 59, 0.9) !important;
+  border-color: rgba(34, 211, 238, 0.5) !important;
+  color: #22d3ee !important;
+  fill: #22d3ee !important;
+}
+
+.react-flow__minimap {
+  background: rgba(10, 14, 23, 0.9) !important;
+  border: 1px solid rgba(34, 211, 238, 0.2) !important;
+  border-radius: 8px !important;
+}
+
+.react-flow__edge-path {
+  stroke: #22d3ee !important;
+}
+
+.react-flow__attribution {
+  display: none;
+}

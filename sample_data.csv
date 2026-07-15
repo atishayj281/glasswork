@@ -1,0 +1,13 @@
+region,revenue,orders,status,date
+North,125000,450,active,2024-01-15
+South,98000,320,active,2024-01-16
+East,156000,580,active,2024-01-17
+West,87000,290,inactive,2024-01-18
+North,132000,470,active,2024-02-10
+South,105000,350,active,2024-02-11
+East,148000,540,active,2024-02-12
+West,92000,310,active,2024-02-13
+North,118000,420,inactive,2024-03-05
+South,112000,380,active,2024-03-06
+East,162000,600,active,2024-03-07
+West,78000,260,inactive,2024-03-08
