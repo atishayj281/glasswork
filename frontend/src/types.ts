@@ -78,6 +78,7 @@ export interface ExecutionResult {
   row_count: number;
   viz_specs: VizSpec[];
   execution_log: StepLog[];
+  preview_step_id?: string;
 }
 
 export interface ChatMessage {

@@ -4,8 +4,89 @@ from typing import Any
 
 import pandas as pd
 
-from app.models.pipeline import ExecutionResult, PipelinePlan, StepLog, VizSpec
+from app.models.pipeline import ExecutionResult, PipelinePlan, PipelineStep, StepLog, VizSpec
 from app.services.viz import build_chart
+
+
+def _build_graph(
+    plan: PipelinePlan,
+) -> tuple[dict[str, list[str]], dict[str, list[str]], dict[str, int]]:
+    parents: dict[str, list[str]] = {s.id: [] for s in plan.steps}
+    children: dict[str, list[str]] = {s.id: [] for s in plan.steps}
+    in_degree: dict[str, int] = {s.id: 0 for s in plan.steps}
+
+    for edge in plan.edges:
+        if edge.source in children and edge.target in parents:
+            children[edge.source].append(edge.target)
+            parents[edge.target].append(edge.source)
+            in_degree[edge.target] += 1
+
+    return parents, children, in_degree
+
+
+def _resolve_input(
+    step_id: str,
+    parents: dict[str, list[str]],
+    outputs: dict[str, pd.DataFrame],
+    source_df: pd.DataFrame,
+) -> pd.DataFrame:
+    step_parents = parents.get(step_id, [])
+
+    if len(step_parents) == 0:
+        return source_df.copy()
+    if len(step_parents) == 1:
+        return outputs[step_parents[0]].copy()
+    raise ValueError(
+        f"Step '{step_id}' has {len(step_parents)} parents; multi-input merge is not supported"
+    )
+
+
+def _select_preview_sink(
+    plan: PipelinePlan,
+    step_map: dict[str, PipelineStep],
+    parents: dict[str, list[str]],
+    children: dict[str, list[str]],
+    outputs: dict[str, pd.DataFrame],
+) -> tuple[pd.DataFrame, str]:
+    sink_ids = [sid for sid in step_map if not children.get(sid)]
+
+    if not sink_ids:
+        last_id = plan.steps[-1].id
+        return outputs[last_id], last_id
+
+    def output_for_sink(sink_id: str) -> pd.DataFrame:
+        step = step_map[sink_id]
+        if step.type == "visualize" and parents.get(sink_id):
+            return outputs[parents[sink_id][0]]
+        return outputs[sink_id]
+
+    non_viz_sinks = [sid for sid in sink_ids if step_map[sid].type != "visualize"]
+    candidates = non_viz_sinks if non_viz_sinks else sink_ids
+
+    best_id = max(candidates, key=lambda sid: len(output_for_sink(sid)))
+    return output_for_sink(best_id), best_id
+
+
+def _is_dag(plan: PipelinePlan) -> bool:
+    """Return False when the edge graph contains a cycle."""
+    _, _, in_degree = _build_graph(plan)
+    adjacency: dict[str, list[str]] = {s.id: [] for s in plan.steps}
+    for edge in plan.edges:
+        if edge.source in adjacency and edge.target in in_degree:
+            adjacency[edge.source].append(edge.target)
+
+    queue = deque([sid for sid, deg in in_degree.items() if deg == 0])
+    visited = 0
+
+    while queue:
+        node = queue.popleft()
+        visited += 1
+        for neighbor in adjacency.get(node, []):
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+
+    return visited == len(plan.steps)
 
 
 def _topological_order(plan: PipelinePlan) -> list[str]:
@@ -147,35 +228,55 @@ def _apply_step(df: pd.DataFrame, step_type: str, params: dict[str, Any]) -> pd.
     raise ValueError(f"Unknown step type: {step_type}")
 
 
+def _run_step(
+    step: PipelineStep,
+    input_df: pd.DataFrame,
+    viz_specs: list[VizSpec],
+) -> tuple[pd.DataFrame, str]:
+    if step.type == "visualize":
+        figure = build_chart(input_df, step.params)
+        viz_specs.append(
+            VizSpec(
+                step_id=step.id,
+                chart_type=step.params.get("chart_type", "bar"),
+                title=step.label,
+                figure=figure,
+            )
+        )
+        return input_df, f"Generated {step.params.get('chart_type', 'bar')} chart"
+    return _apply_step(input_df, step.type, step.params), f"Applied {step.type}"
+
+
 def execute_pipeline(df: pd.DataFrame, plan: PipelinePlan) -> ExecutionResult:
     step_map = {s.id: s for s in plan.steps}
+    parents, children, _ = _build_graph(plan)
     order = _topological_order(plan)
-    current = df.copy()
+    use_linear_fallback = not _is_dag(plan)
+    outputs: dict[str, pd.DataFrame] = {}
     logs: list[StepLog] = []
     viz_specs: list[VizSpec] = []
+    current = df.copy()
 
     for step_id in order:
         step = step_map.get(step_id)
         if not step:
             continue
 
-        rows_in = len(current)
+        if use_linear_fallback:
+            input_df = current
+        else:
+            input_df = _resolve_input(step_id, parents, outputs, df)
+
+        rows_in = len(input_df)
         start = time.perf_counter()
 
-        if step.type == "visualize":
-            figure = build_chart(current, step.params)
-            viz_specs.append(
-                VizSpec(
-                    step_id=step.id,
-                    chart_type=step.params.get("chart_type", "bar"),
-                    title=step.label,
-                    figure=figure,
-                )
-            )
-            message = f"Generated {step.params.get('chart_type', 'bar')} chart"
-        else:
-            current = _apply_step(current, step.type, step.params)
-            message = f"Applied {step.type}"
+        try:
+            result_df, message = _run_step(step, input_df, viz_specs)
+            outputs[step_id] = result_df
+            if use_linear_fallback:
+                current = result_df
+        except Exception as e:
+            raise ValueError(f"Step '{step.label}' ({step_id}): {e}") from e
 
         duration_ms = (time.perf_counter() - start) * 1000
         logs.append(
@@ -184,17 +285,23 @@ def execute_pipeline(df: pd.DataFrame, plan: PipelinePlan) -> ExecutionResult:
                 step_type=step.type,
                 label=step.label,
                 rows_in=rows_in,
-                rows_out=len(current),
+                rows_out=len(outputs[step_id]),
                 duration_ms=round(duration_ms, 2),
                 message=message,
             )
         )
 
-    preview = current.head(50).where(pd.notna(current.head(50)), None).to_dict(orient="records")
+    preview_df, preview_step_id = _select_preview_sink(
+        plan, step_map, parents, children, outputs
+    )
+    preview = preview_df.head(50).where(pd.notna(preview_df.head(50)), None).to_dict(
+        orient="records"
+    )
     return ExecutionResult(
         preview=preview,
-        columns=list(current.columns.astype(str)),
-        row_count=len(current),
+        columns=list(preview_df.columns.astype(str)),
+        row_count=len(preview_df),
         viz_specs=viz_specs,
         execution_log=logs,
+        preview_step_id=preview_step_id,
     )

@@ -425,11 +425,12 @@ When `POST /api/pipeline/{session_id}/execute` is called:
 
 ### Execution semantics
 
-- **Single DataFrame flow** — one `current` DataFrame is mutated step by step
-- **Edges define ordering only** — there is no DAG branching or merging; steps run in a linear sequence determined by topological sort
+- **Per-step output cache** — each step stores its output dataframe; children read from their parent's output
+- **Forks supported** — one parent may have multiple children; sibling branches do not interfere
+- **Multi-input merge not supported** — steps with more than one parent are rejected with a clear error
 - **Cycle fallback** — if the edge graph has a cycle, steps run in their list order
-- **`visualize` is side-effect free** — it reads the current DataFrame but does not modify it
-- **Preview** — first 50 rows returned as JSON (NaN → `null`)
+- **`visualize` is side-effect free** — it reads the parent dataframe but does not modify it
+- **Preview** — first 50 rows from the sink step with the most rows (`preview_step_id` identifies which branch)
 
 ### Step implementations (pandas)
 
@@ -458,6 +459,7 @@ Computed columns use `pandas.eval()` with the Python engine. Expressions are def
   "preview": [ { "region": "West", "revenue": 12000 }, ... ],
   "columns": ["region", "revenue"],
   "row_count": 42,
+  "preview_step_id": "g1",
   "viz_specs": [
     {
       "step_id": "v1",
@@ -627,7 +629,7 @@ Docker Compose mounts a volume at `/root/.aegis` so Parquet files persist across
 ## Known Limitations
 
 1. **Single-process sessions** — in-memory store does not scale across multiple server instances without external session/storage.
-2. **Linear execution** — DAG edges order steps but do not support parallel branches or multi-input merges.
+2. **Multi-input merge not supported** — forked branches work, but steps with multiple parents cannot combine data yet.
 3. **Session volatility** — chat history and pipeline plans are lost on server restart (only Parquet survives if `DATA_DIR` is persisted).
 4. **No multi-user access** — sessions are identified by UUID with no ownership model.
 5. **GPT-optimized structured output** — pipeline generation works best with OpenAI models; other providers rely on manual JSON parsing with retry.

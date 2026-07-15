@@ -51,6 +51,9 @@ RULES:
 - Include a 'visualize' step when the user wants insights or charts.
 - Each step needs: id, type, label, params, position (x, y spaced by 250).
 - Edges connect steps in execution order.
+- Forking is supported: one parent step may connect to multiple children (shared prep, then parallel branches).
+- Do NOT create steps with multiple incoming edges (multi-input merge is not supported).
+- When forking, each branch should end in its own visualize step.
 
 STEP PARAM SCHEMAS (follow exactly):
 

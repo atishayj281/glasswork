@@ -258,3 +258,4 @@ class ExecutionResult(BaseModel):
     row_count: int
     viz_specs: list[VizSpec]
     execution_log: list[StepLog]
+    preview_step_id: str | None = None

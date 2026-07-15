@@ -87,6 +87,13 @@ export default function VizDashboard({ result }: Props) {
       {result.preview.length > 0 && (
         <div>
           <SectionHeader>Data Preview</SectionHeader>
+          {result.preview_step_id && (
+            <p className="text-xs text-slate-500 font-mono mb-2">
+              Preview from:{" "}
+              {result.execution_log.find((log) => log.step_id === result.preview_step_id)?.label ??
+                result.preview_step_id}
+            </p>
+          )}
           <div className="glass-card overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
