@@ -15,7 +15,7 @@ StepType = Literal[
     "visualize",
 ]
 
-FilterOp = Literal["eq", "neq", "gt", "gte", "lt", "lte", "contains", "is_null", "not_null"]
+FilterOp = Literal["eq", "neq", "gt", "gte", "lt", "lte", "contains", "is_null", "not_null", "between"]
 AggFunc = Literal["sum", "count", "mean", "min", "max"]
 ChartType = Literal["bar", "line", "scatter", "pie", "histogram", "heatmap"]
 CastDtype = Literal["int", "float", "str", "datetime"]
@@ -52,7 +52,7 @@ class CastTypeParams(BaseModel):
 
 class GroupByParams(BaseModel):
     group_by: list[str] = Field(default_factory=list)
-    aggregations: dict[str, AggFunc]
+    aggregations: dict[str, Any]  # values may be AggFunc strings or {"column": ..., "func": ...} dicts
 
 
 class SortParams(BaseModel):

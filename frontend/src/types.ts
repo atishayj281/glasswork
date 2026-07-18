@@ -17,6 +17,7 @@ export interface DatasetProfile {
   column_count: number;
   columns: ColumnMeta[];
   excel_meta?: ExcelIngestMeta | null;
+  process_on_client?: boolean;
 }
 
 export type StepType =
@@ -84,4 +85,13 @@ export interface ExecutionResult {
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+export interface SavedPipeline {
+  id: string;
+  name: string;
+  plan: PipelinePlan;
+  profile?: DatasetProfile | null;
+  createdAt?: { seconds: number };
+  updatedAt?: { seconds: number };
 }

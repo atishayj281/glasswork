@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { DatasetProfile } from "../types";
-import { uploadFile } from "../lib/api";
+import { uploadAndIngest } from "../lib/api";
 import { Input } from "./ui/Input";
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
 export default function FileUpload({ onUploaded }: Props) {
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [headerRow, setHeaderRow] = useState<string>("");
 
@@ -17,17 +18,23 @@ export default function FileUpload({ onUploaded }: Props) {
     async (file: File) => {
       setLoading(true);
       setError(null);
+      setProgress(0);
       try {
+        // Send file directly to backend — backend uploads to Supabase with service role key
+        setProgress(20);
         const opts =
           headerRow.trim() !== "" && !Number.isNaN(Number(headerRow))
             ? { headerRow: Number(headerRow) }
             : undefined;
-        const { session_id, profile } = await uploadFile(file, opts);
+        setProgress(50);
+        const { session_id, profile } = await uploadAndIngest(file, opts);
+        setProgress(100);
         onUploaded(session_id, profile);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Upload failed");
       } finally {
         setLoading(false);
+        setProgress(0);
       }
     },
     [onUploaded, headerRow],
@@ -72,8 +79,18 @@ export default function FileUpload({ onUploaded }: Props) {
           Drop a CSV or Excel file here, or click to browse
         </p>
         <p className="text-xs text-slate-500 mb-4 font-mono">
-          Merged Excel cells are auto-resolved on upload
+          Merged Excel cells are auto-resolved · Files stored in Cloud Storage
         </p>
+
+        {loading && (
+          <div className="w-full bg-slate-700/50 rounded-full h-1.5 mb-4 overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-neon-cyan to-neon-violet transition-all duration-300"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        )}
+
         <input
           type="file"
           accept=".csv,.xlsx,.xls"
@@ -93,7 +110,7 @@ export default function FileUpload({ onUploaded }: Props) {
             ${loading ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}
           `}
         >
-          {loading ? "Uploading..." : "Choose File"}
+          {loading ? `Uploading… ${progress}%` : "Choose File"}
         </label>
         {error && <p className="text-red-400 mt-3 text-sm font-mono">{error}</p>}
       </div>

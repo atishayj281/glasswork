@@ -9,7 +9,7 @@ from app.config import LITELLM_MODEL
 from app.models.pipeline import PipelinePlan, TypedPipelinePlan
 from app.models.schema import DatasetProfile
 from app.services.pipeline_normalizer import normalize_pipeline_data
-from app.services.session import SessionState
+from app.services.session import SessionState, session_store
 
 logger = logging.getLogger(__name__)
 
@@ -51,20 +51,24 @@ RULES:
 - Include a 'visualize' step when the user wants insights or charts.
 - Each step needs: id, type, label, params, position (x, y spaced by 250).
 - Edges connect steps in execution order.
-- Forking is supported: one parent step may connect to multiple children (shared prep, then parallel branches).
-- Do NOT create steps with multiple incoming edges (multi-input merge is not supported).
+- Forking is ONLY allowed from ONE parent to MULTIPLE children (fan-out). Example: s1 -> v1 and s1 -> v2.
+- NEVER create a step with multiple incoming edges (fan-in/merge is NOT supported). Every step must have at most ONE parent.
+- CRITICAL: Multiple compute_column steps must be CHAINED sequentially, NOT forked from the same parent. WRONG: f1->c1, f1->c2, c1->g1, c2->g1. RIGHT: f1->c1->c2->g1.
 - When forking, each branch should end in its own visualize step.
 
 STEP PARAM SCHEMAS (follow exactly):
 
 filter:
   { "column": "status", "op": "eq", "value": "active" }
-  ops: eq, neq, gt, gte, lt, lte, contains, is_null, not_null
+  ops: eq, neq, gt, gte, lt, lte, contains, is_null, not_null, between
+  Note: For 'between', value must be a list of exactly two numbers/strings representing [min, max] (e.g. [10, 20] or ["2024-01-01", "2024-03-31"])
 
 groupby_agg:
-  { "group_by": ["region"], "aggregations": { "revenue": "sum", "orders": "count" } }
-  aggregations MUST be a dict mapping column -> function (sum, count, mean, min, max).
-  group_by MUST be a list of column names (use one column for single-group summaries).
+  Simple (output name = source column):  { "group_by": ["region"], "aggregations": { "gross_revenue": "sum", "order_id": "count" } }
+  Extended (custom output name):          { "group_by": ["region"], "aggregations": { "total_revenue": {"column": "gross_revenue", "func": "sum"}, "order_count": {"column": "order_id", "func": "count"} } }
+  IMPORTANT: Use the extended format when you want a different output column name than the source column (e.g., summing 'gross_revenue' and naming it 'total_revenue').
+  aggregation functions: sum, count, mean, min, max
+  group_by MUST be a list of existing column names.
 
 sort:
   { "columns": ["revenue"], "ascending": false }
@@ -194,12 +198,21 @@ async def chat_stream(
     user_message: str,
 ) -> AsyncGenerator[str, None]:
     session.chat_history.append({"role": "user", "content": user_message})
+    session_store.save(session)
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": f"Dataset profile:\n{_profile_context(session.profile)}"},
         *session.chat_history,
     ]
+
+    logger.info(
+        "Chat stream prompt | session=%s model=%s user_message=%r\n%s",
+        session.session_id,
+        LITELLM_MODEL,
+        user_message,
+        json.dumps(messages, indent=2),
+    )
 
     response = await litellm.acompletion(
         model=LITELLM_MODEL,
@@ -214,7 +227,14 @@ async def chat_stream(
             full_response += delta
             yield delta
 
+    logger.info(
+        "Chat stream output | session=%s\n%s",
+        session.session_id,
+        full_response,
+    )
+
     session.chat_history.append({"role": "assistant", "content": full_response})
+    session_store.save(session)
 
 
 async def generate_pipeline(session: SessionState, intent: str | None = None) -> PipelinePlan:
@@ -236,6 +256,11 @@ async def generate_pipeline(session: SessionState, intent: str | None = None) ->
         )
 
         content = await _call_llm(messages, use_structured=use_structured)
+        logger.info(
+            "Pipeline generation raw LLM response | session=%s\n%s",
+            session.session_id,
+            content,
+        )
 
         try:
             data = _parse_pipeline_content(content)
@@ -246,6 +271,7 @@ async def generate_pipeline(session: SessionState, intent: str | None = None) ->
                 plan.model_dump_json(indent=2),
             )
             session.pipeline = plan
+            session_store.save(session)
             return plan
         except Exception as e:
             last_error = str(e)

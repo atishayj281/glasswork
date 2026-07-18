@@ -20,3 +20,5 @@ class DatasetProfile(BaseModel):
     column_count: int
     columns: list[ColumnMeta]
     excel_meta: ExcelIngestMeta | None = None
+    process_on_client: bool = True
+

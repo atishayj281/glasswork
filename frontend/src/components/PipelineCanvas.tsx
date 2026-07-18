@@ -13,8 +13,9 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import type { PipelinePlan, PipelineStep } from "../types";
-import { executePipeline, getPipeline, updatePipeline } from "../lib/api";
+import type { PipelinePlan, PipelineStep, ExecutionResult } from "../types";
+import { executePipeline, getPipeline, updatePipeline, downloadDataset, getExecutionStatus } from "../lib/api";
+import { executePipelineLocally } from "../lib/executor";
 import StepNode from "./StepNode";
 import StepEditor from "./StepEditor";
 import Button from "./ui/Button";
@@ -25,7 +26,9 @@ const nodeTypes = { stepNode: StepNode };
 interface Props {
   sessionId: string | null;
   refreshKey: number;
-  onExecuted: (result: Awaited<ReturnType<typeof executePipeline>>) => void;
+  onExecuted: (result: ExecutionResult) => void;
+  onPipelineChange?: (plan: PipelinePlan) => void;
+  processOnClient?: boolean;
 }
 
 function planToFlow(plan: PipelinePlan): { nodes: Node[]; edges: Edge[] } {
@@ -61,13 +64,18 @@ function flowToPlan(
   };
 }
 
-export default function PipelineCanvas({ sessionId, refreshKey, onExecuted }: Props) {
+export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPipelineChange, processOnClient }: Props) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [planName, setPlanName] = useState("Untitled Pipeline");
   const [selectedStep, setSelectedStep] = useState<PipelineStep | null>(null);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dataset, setDataset] = useState<Record<string, any>[] | null>(null);
+
+  useEffect(() => {
+    setDataset(null);
+  }, [sessionId]);
 
   const loadPipeline = useCallback(async () => {
     if (!sessionId) return;
@@ -77,8 +85,9 @@ export default function PipelineCanvas({ sessionId, refreshKey, onExecuted }: Pr
       const { nodes: n, edges: e } = planToFlow(plan);
       setNodes(n);
       setEdges(e);
+      onPipelineChange?.(plan);
     }
-  }, [sessionId, setNodes, setEdges]);
+  }, [sessionId, setNodes, setEdges, onPipelineChange]);
 
   useEffect(() => {
     loadPipeline();
@@ -103,6 +112,7 @@ export default function PipelineCanvas({ sessionId, refreshKey, onExecuted }: Pr
     try {
       const plan = flowToPlan(planName, nodes, edges);
       await updatePipeline(sessionId, plan);
+      onPipelineChange?.(plan);
     } finally {
       setSaving(false);
     }
@@ -113,8 +123,38 @@ export default function PipelineCanvas({ sessionId, refreshKey, onExecuted }: Pr
     setRunning(true);
     try {
       await handleSave();
-      const result = await executePipeline(sessionId);
-      onExecuted(result);
+      
+      if (processOnClient) {
+        let currentDataset = dataset;
+        if (!currentDataset) {
+          currentDataset = await downloadDataset(sessionId);
+          setDataset(currentDataset);
+        }
+        const plan = flowToPlan(planName, nodes, edges);
+        const result = executePipelineLocally(currentDataset, plan);
+        onExecuted(result);
+      } else {
+        await executePipeline(sessionId);
+        
+        let done = false;
+        let pollCount = 0;
+        while (!done && pollCount < 100) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          const statusRes = await getExecutionStatus(sessionId);
+          if (statusRes.status === "completed") {
+            if (statusRes.result) {
+              onExecuted(statusRes.result);
+            }
+            done = true;
+          } else if (statusRes.status === "failed") {
+            throw new Error(statusRes.error || "Backend pipeline execution failed");
+          }
+          pollCount++;
+        }
+        if (!done) {
+          throw new Error("Execution timed out");
+        }
+      }
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "Execution failed");
     } finally {

@@ -1,7 +1,7 @@
 # Run the Aegis backend using the project venv (not global Python).
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Python = Join-Path $Root ".venv\Scripts\python.exe"
+$Python = Join-Path $Root "venv\Scripts\python.exe"
 
 if (-not (Test-Path $Python)) {
     Write-Host "Creating virtual environment..."

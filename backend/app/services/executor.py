@@ -1,3 +1,4 @@
+import logging
 import time
 from collections import deque
 from typing import Any
@@ -6,6 +7,8 @@ import pandas as pd
 
 from app.models.pipeline import ExecutionResult, PipelinePlan, PipelineStep, StepLog, VizSpec
 from app.services.viz import build_chart
+
+logger = logging.getLogger(__name__)
 
 
 def _build_graph(
@@ -140,11 +143,24 @@ def _apply_filter(df: pd.DataFrame, params: dict[str, Any]) -> pd.DataFrame:
         return df[df[col].isna()]
     if op == "not_null":
         return df[df[col].notna()]
+    if op == "between":
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            return df[(df[col] >= value[0]) & (df[col] <= value[1])]
+        raise ValueError(f"Value for 'between' operator must be a list/tuple of 2 elements, got {value}")
     raise ValueError(f"Unknown filter operator: {op}")
 
 
 def _normalize_aggregations(aggregations: Any) -> dict[str, tuple[str, str]]:
-    """Normalize aggregations to {output_name: (source_column, func)}."""
+    """Normalize aggregations to {output_name: (source_column, func)}.
+
+    Handles three formats the LLM may produce:
+      1. Simple:   {"gross_revenue": "sum"}
+         -> output=gross_revenue, source=gross_revenue
+      2. Extended: {"total_revenue": {"column": "gross_revenue", "func": "sum"}}
+         -> output=total_revenue, source=gross_revenue
+      3. List:     [{"column": "gross_revenue", "func": "sum", "alias": "total_revenue"}]
+         -> output=total_revenue, source=gross_revenue
+    """
     if isinstance(aggregations, list):
         result: dict[str, tuple[str, str]] = {}
         for item in aggregations:
@@ -152,13 +168,25 @@ def _normalize_aggregations(aggregations: Any) -> dict[str, tuple[str, str]]:
                 continue
             col = item.get("column") or item.get("col", "")
             func = item.get("function") or item.get("func") or item.get("agg", "sum")
-            alias = item.get("alias") or col
+            alias = item.get("alias") or item.get("as") or col
             result[alias] = (col, func)
         return result
 
     if isinstance(aggregations, dict):
-        return {col: (col, func) for col, func in aggregations.items()}
+        result = {}
+        for output_name, spec in aggregations.items():
+            if isinstance(spec, dict):
+                # Extended format: {"total_revenue": {"column": "gross_revenue", "func": "sum"}}
+                col = spec.get("column") or spec.get("col") or output_name
+                func = spec.get("func") or spec.get("function") or spec.get("agg", "sum")
+            else:
+                # Simple format: {"gross_revenue": "sum"} — output name IS the source column
+                col = output_name
+                func = str(spec)
+            result[output_name] = (col, func)
+        return result
     return {}
+
 
 
 def _apply_groupby_agg(df: pd.DataFrame, params: dict[str, Any]) -> pd.DataFrame:
@@ -248,10 +276,18 @@ def _run_step(
 
 
 def execute_pipeline(df: pd.DataFrame, plan: PipelinePlan) -> ExecutionResult:
+    logger.info(
+        "[executor] START pipeline=%r steps=%d edges=%d input_rows=%d input_cols=%d",
+        plan.name, len(plan.steps), len(plan.edges), len(df), len(df.columns),
+    )
     step_map = {s.id: s for s in plan.steps}
     parents, children, _ = _build_graph(plan)
     order = _topological_order(plan)
     use_linear_fallback = not _is_dag(plan)
+    if use_linear_fallback:
+        logger.warning("[executor] pipeline=%r is NOT a DAG — using linear fallback order", plan.name)
+    else:
+        logger.info("[executor] topological order: %s", order)
     outputs: dict[str, pd.DataFrame] = {}
     logs: list[StepLog] = []
     viz_specs: list[VizSpec] = []
@@ -260,6 +296,7 @@ def execute_pipeline(df: pd.DataFrame, plan: PipelinePlan) -> ExecutionResult:
     for step_id in order:
         step = step_map.get(step_id)
         if not step:
+            logger.warning("[executor] step_id=%s not found in step_map — skipping", step_id)
             continue
 
         if use_linear_fallback:
@@ -268,6 +305,10 @@ def execute_pipeline(df: pd.DataFrame, plan: PipelinePlan) -> ExecutionResult:
             input_df = _resolve_input(step_id, parents, outputs, df)
 
         rows_in = len(input_df)
+        logger.info(
+            "[executor] STEP start | id=%s type=%s label=%r rows_in=%d",
+            step.id, step.type, step.label, rows_in,
+        )
         start = time.perf_counter()
 
         try:
@@ -276,16 +317,25 @@ def execute_pipeline(df: pd.DataFrame, plan: PipelinePlan) -> ExecutionResult:
             if use_linear_fallback:
                 current = result_df
         except Exception as e:
+            logger.error(
+                "[executor] STEP FAILED | id=%s type=%s label=%r error=%s",
+                step.id, step.type, step.label, e, exc_info=True,
+            )
             raise ValueError(f"Step '{step.label}' ({step_id}): {e}") from e
 
         duration_ms = (time.perf_counter() - start) * 1000
+        rows_out = len(outputs[step_id])
+        logger.info(
+            "[executor] STEP done  | id=%s type=%s rows_out=%d duration_ms=%.1f msg=%r",
+            step.id, step.type, rows_out, duration_ms, message,
+        )
         logs.append(
             StepLog(
                 step_id=step.id,
                 step_type=step.type,
                 label=step.label,
                 rows_in=rows_in,
-                rows_out=len(outputs[step_id]),
+                rows_out=rows_out,
                 duration_ms=round(duration_ms, 2),
                 message=message,
             )
@@ -293,6 +343,10 @@ def execute_pipeline(df: pd.DataFrame, plan: PipelinePlan) -> ExecutionResult:
 
     preview_df, preview_step_id = _select_preview_sink(
         plan, step_map, parents, children, outputs
+    )
+    logger.info(
+        "[executor] DONE pipeline=%r preview_step=%s preview_rows=%d viz_specs=%d",
+        plan.name, preview_step_id, len(preview_df), len(viz_specs),
     )
     preview = preview_df.head(50).where(pd.notna(preview_df.head(50)), None).to_dict(
         orient="records"

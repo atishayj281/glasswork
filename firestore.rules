@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can only read/write their own data
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Sessions collection (written by backend via Admin SDK — no client rules needed)
+    match /sessions/{sessionId} {
+      allow read, write: if false; // Admin SDK bypasses rules
+    }
+  }
+}
