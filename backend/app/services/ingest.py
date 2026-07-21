@@ -53,6 +53,24 @@ def _read_upload(
     raise ValueError("Only CSV and Excel files are supported")
 
 
+def sanitize_formulas(df: pd.DataFrame) -> pd.DataFrame:
+    """Sanitize cells starting with =, +, -, @ to prevent CSV/Excel formula injection.
+    
+    Decision: We prefix dangerous cells with a single quote ('). This is the recommended
+    defense (e.g. by OWASP) because it forces Excel to treat the cell contents as text,
+    preventing arbitrary execution while preserving the actual value. We only sanitize
+    actual string values so that numeric values (which may naturally start with - or +)
+    remain intact as numbers.
+    """
+    for col in df.columns:
+        df[col] = df[col].apply(
+            lambda val: f"'{val}"
+            if isinstance(val, str) and val.lstrip().startswith(('=', '+', '-', '@'))
+            else val
+        )
+    return df
+
+
 def ingest_file(
     content: bytes,
     filename: str,

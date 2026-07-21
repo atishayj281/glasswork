@@ -6,6 +6,7 @@ import PipelineCanvas from "./components/PipelineCanvas";
 import VizDashboard from "./components/VizDashboard";
 import AuthPage from "./components/AuthPage";
 import PipelineLibrary from "./components/PipelineLibrary";
+import SavedPipelinesModal from "./components/SavedPipelinesModal";
 import Button from "./components/ui/Button";
 import { useAuth } from "./hooks/useAuth";
 import { claimSession, updatePipeline } from "./lib/api";
@@ -20,6 +21,7 @@ export default function App() {
   const [result, setResult] = useState<ExecutionResult | null>(null);
   const [showUpload, setShowUpload] = useState(true);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showSavedWebhooks, setShowSavedWebhooks] = useState(false);
   const [currentPipeline, setCurrentPipeline] = useState<PipelinePlan | null>(null);
   // Pipeline imported before any file was uploaded — applied automatically on first upload
   const [pendingPipeline, setPendingPipeline] = useState<PipelinePlan | null>(null);
@@ -123,6 +125,17 @@ export default function App() {
           <Button
             variant="secondary"
             size="sm"
+            onClick={() => setShowSavedWebhooks(true)}
+            id="open-webhooks-btn"
+          >
+            <svg className="w-3.5 h-3.5 mr-1.5 text-neon-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            Webhooks
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setShowLibrary(true)}
             id="open-library-btn"
           >
@@ -196,6 +209,7 @@ export default function App() {
               refreshKey={pipelineRefresh}
               onExecuted={setResult}
               onPipelineChange={setCurrentPipeline}
+              onOpenWebhooks={() => setShowSavedWebhooks(true)}
               processOnClient={profile?.process_on_client}
             />
           </div>
@@ -214,6 +228,15 @@ export default function App() {
           onClose={() => setShowLibrary(false)}
         />
       )}
+
+      {showSavedWebhooks && (
+        <SavedPipelinesModal
+          sessionId={sessionId}
+          currentPipelineName={currentPipeline?.name}
+          onClose={() => setShowSavedWebhooks(false)}
+        />
+      )}
     </div>
   );
 }
+

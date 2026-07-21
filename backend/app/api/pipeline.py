@@ -1,11 +1,15 @@
 import logging
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
+from app.config import BUDGET_MAX_CALLS_PER_DAY, BUDGET_MAX_TOKENS_PER_DAY
+from app.middleware.auth import get_current_user_optional, require_session_access
+from app.middleware.rate_limit import limiter
 from app.models.pipeline import ExecutionResult, PipelinePlan
 from app.services.agent import generate_pipeline
+from app.services.budget import check_budget, record_llm_call
 from app.services.executor import execute_pipeline
 from app.services.session import session_store
 
@@ -18,12 +22,12 @@ class GenerateRequest(BaseModel):
 
 
 @router.get("/pipeline/{session_id}")
-async def get_pipeline(session_id: str) -> PipelinePlan | None:
+async def get_pipeline(
+    session_id: str,
+    uid: str | None = Depends(get_current_user_optional),
+) -> PipelinePlan | None:
     logger.info("[GET /pipeline] session=%s", session_id)
-    session = session_store.get(session_id)
-    if not session:
-        logger.warning("[GET /pipeline] session=%s NOT FOUND", session_id)
-        raise HTTPException(404, "Session not found")
+    session = require_session_access(session_id, uid)
     has_pipeline = session.pipeline is not None
     step_count = len(session.pipeline.steps) if has_pipeline else 0
     logger.info("[GET /pipeline] session=%s has_pipeline=%s steps=%d", session_id, has_pipeline, step_count)
@@ -31,12 +35,13 @@ async def get_pipeline(session_id: str) -> PipelinePlan | None:
 
 
 @router.patch("/pipeline/{session_id}")
-async def update_pipeline(session_id: str, plan: PipelinePlan) -> PipelinePlan:
+async def update_pipeline(
+    session_id: str,
+    plan: PipelinePlan,
+    uid: str | None = Depends(get_current_user_optional),
+) -> PipelinePlan:
     logger.info("[PATCH /pipeline] session=%s steps=%d edges=%d", session_id, len(plan.steps), len(plan.edges))
-    session = session_store.get(session_id)
-    if not session:
-        logger.warning("[PATCH /pipeline] session=%s NOT FOUND", session_id)
-        raise HTTPException(404, "Session not found")
+    session = require_session_access(session_id, uid)
     session.pipeline = plan
     session_store.save(session)
     logger.info("[PATCH /pipeline] session=%s saved OK — pipeline=%r", session_id, plan.name)
@@ -44,17 +49,33 @@ async def update_pipeline(session_id: str, plan: PipelinePlan) -> PipelinePlan:
 
 
 @router.post("/pipeline/{session_id}/generate")
-async def generate(session_id: str, body: GenerateRequest | None = None) -> PipelinePlan:
+async def generate(
+    session_id: str,
+    body: GenerateRequest | None = None,
+    uid: str | None = Depends(get_current_user_optional),
+) -> PipelinePlan:
     logger.info("[POST /generate] session=%s intent=%r", session_id, body.intent if body else None)
-    session = session_store.get(session_id)
-    if not session:
-        logger.warning("[POST /generate] session=%s NOT FOUND", session_id)
-        raise HTTPException(404, "Session not found")
+    session = require_session_access(session_id, uid)
+
+    # Protect LLM endpoints with per-second rate limiting
+    rate_limit_key = uid if uid else f"session_{session_id}"
+    limiter.check(rate_limit_key)
+
+    # Enforce per-uid daily LLM budget (only for authenticated users)
+    if uid:
+        try:
+            check_budget(uid, BUDGET_MAX_CALLS_PER_DAY, BUDGET_MAX_TOKENS_PER_DAY)
+        except ValueError as e:
+            raise HTTPException(status_code=429, detail=str(e))
 
     intent = body.intent if body else None
     try:
         plan = await generate_pipeline(session, intent)
         logger.info("[POST /generate] session=%s generated pipeline=%r steps=%d", session_id, plan.name, len(plan.steps))
+        # Record one LLM call; token count estimated from pipeline JSON size
+        if uid:
+            token_estimate = len(plan.model_dump_json()) // 4
+            record_llm_call(uid, tokens_used=token_estimate)
         return plan
     except Exception as e:
         logger.error("[POST /generate] session=%s FAILED error=%s", session_id, e)
@@ -62,6 +83,8 @@ async def generate(session_id: str, body: GenerateRequest | None = None) -> Pipe
 
 
 def run_pipeline_bg(session_id: str):
+    # Background task — called server-side after the caller's access has already
+    # been authorised by the /execute endpoint.  No uid check needed here.
     logger.info("[BG] pipeline execution started | session=%s", session_id)
     session = session_store.get(session_id)
     if not session or not session.pipeline:
@@ -95,12 +118,13 @@ def run_pipeline_bg(session_id: str):
 
 
 @router.post("/pipeline/{session_id}/execute")
-async def execute(session_id: str, background_tasks: BackgroundTasks):
+async def execute(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    uid: str | None = Depends(get_current_user_optional),
+):
     logger.info("[POST /execute] session=%s triggering background execution", session_id)
-    session = session_store.get(session_id)
-    if not session:
-        logger.warning("[POST /execute] session=%s NOT FOUND", session_id)
-        raise HTTPException(404, "Session not found")
+    session = require_session_access(session_id, uid)
     if not session.pipeline:
         logger.warning("[POST /execute] session=%s has no pipeline", session_id)
         raise HTTPException(400, "No pipeline defined. Generate or create one first.")
@@ -116,10 +140,11 @@ async def execute(session_id: str, background_tasks: BackgroundTasks):
 
 
 @router.get("/pipeline/{session_id}/status")
-async def get_status(session_id: str):
-    session = session_store.get(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
+async def get_status(
+    session_id: str,
+    uid: str | None = Depends(get_current_user_optional),
+):
+    session = require_session_access(session_id, uid)
     logger.debug(
         "[GET /status] session=%s status=%s error=%s",
         session_id, session.execution_status, session.execution_error,
@@ -132,30 +157,37 @@ async def get_status(session_id: str):
 
 
 @router.get("/session/{session_id}/download")
-async def download_dataset(session_id: str):
-    session = session_store.get(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
+async def download_dataset(
+    session_id: str,
+    uid: str | None = Depends(get_current_user_optional),
+):
+    require_session_access(session_id, uid)
     df = session_store.load_dataframe(session_id)
     if df is None:
         raise HTTPException(404, "Dataset not found")
-    
+
+    # Sanitize formulas at export-time only
+    from app.services.ingest import sanitize_formulas
+    df = sanitize_formulas(df)
+
     records = df.to_dict(orient="records")
     from app.services.session import _sanitize_for_firestore
     return _sanitize_for_firestore(records)
 
 
 @router.get("/pipeline/{session_id}/logs")
-async def get_logs(session_id: str) -> list[list[dict]]:
-    session = session_store.get(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
+async def get_logs(
+    session_id: str,
+    uid: str | None = Depends(get_current_user_optional),
+) -> list[list[dict]]:
+    session = require_session_access(session_id, uid)
     return [log.model_dump() for log in session.execution_logs]
 
 
 @router.get("/session/{session_id}/profile")
-async def get_profile(session_id: str):
-    session = session_store.get(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
+async def get_profile(
+    session_id: str,
+    uid: str | None = Depends(get_current_user_optional),
+):
+    session = require_session_access(session_id, uid)
     return session.profile

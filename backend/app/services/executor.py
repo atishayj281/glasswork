@@ -1,3 +1,4 @@
+import ast
 import logging
 import time
 from collections import deque
@@ -209,6 +210,100 @@ def _apply_groupby_agg(df: pd.DataFrame, params: dict[str, Any]) -> pd.DataFrame
     return df.groupby(group_by, as_index=False).agg(**named)
 
 
+# ---------------------------------------------------------------------------
+# Restricted expression evaluator for compute_column
+# ---------------------------------------------------------------------------
+
+#: AST node types that are unconditionally permitted in expressions.
+_ALLOWED_NODES: frozenset[type] = frozenset({
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Compare,
+    ast.BoolOp,
+    ast.Name,
+    ast.Constant,
+    ast.Load,
+    # Operators
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
+    ast.USub, ast.UAdd,
+    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+    ast.And, ast.Or,
+})
+
+#: Node types that are explicitly forbidden (belt-and-suspenders — the
+#: allowlist already rejects everything not in _ALLOWED_NODES, but naming
+#: these makes the intent clear in error messages).
+_BLOCKED_NODES: frozenset[type] = frozenset({
+    ast.Attribute,
+    ast.Call,
+    ast.Subscript,
+    ast.Lambda,
+    ast.Import,
+    ast.ImportFrom,
+})
+
+
+def _safe_eval_expression(df: pd.DataFrame, expr: str) -> "pd.Series":
+    """Parse and evaluate *expr* against DataFrame columns in a restricted sandbox.
+
+    Only arithmetic, comparison, and boolean operations referencing existing
+    column names are permitted.  Any attempt to use attribute access, function
+    calls, subscripting, lambdas, or imports raises ``ValueError`` — this
+    eliminates the ``engine='python'`` attribute-chain RCE vector entirely at
+    the parse stage, before any Python code runs.
+
+    Parameters
+    ----------
+    df:
+        The source DataFrame; column names define the only allowed ``Name``
+        nodes in the expression.
+    expr:
+        An arithmetic / comparison expression string, e.g.
+        ``"(revenue - cost) / revenue"``.
+
+    Returns
+    -------
+    pd.Series
+        The evaluated result, suitable for assignment as a new column.
+
+    Raises
+    ------
+    ValueError
+        If *expr* contains disallowed constructs or names not in ``df.columns``.
+    SyntaxError
+        If *expr* cannot be parsed as a Python expression.
+    """
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"Invalid expression syntax: {exc}") from exc
+
+    column_names: frozenset[str] = frozenset(df.columns.astype(str))
+
+    for node in ast.walk(tree):
+        node_type = type(node)
+        if node_type in _BLOCKED_NODES:
+            raise ValueError(
+                f"Disallowed construct in expression: {node_type.__name__!r} is not permitted"
+            )
+        if node_type not in _ALLOWED_NODES:
+            raise ValueError(
+                f"Disallowed construct in expression: {node_type.__name__!r} is not permitted"
+            )
+        if node_type is ast.Name:
+            if node.id not in column_names:  # type: ignore[attr-defined]
+                raise ValueError(f"Unknown column: {node.id!r}")  # type: ignore[attr-defined]
+
+    # Belt-and-suspenders: run with an empty builtins namespace and only
+    # column Series in locals.  The AST walk above already guarantees safety,
+    # but this defence-in-depth prevents builtins from leaking even if a
+    # future node type is inadvertently added to the allowlist.
+    local_ns = {col: df[col] for col in df.columns.astype(str)}
+    compiled = compile(tree, filename="<expression>", mode="eval")
+    return eval(compiled, {"__builtins__": {}}, local_ns)  # noqa: S307
+
+
 def _apply_step(df: pd.DataFrame, step_type: str, params: dict[str, Any]) -> pd.DataFrame:
     if step_type == "filter":
         return _apply_filter(df, params)
@@ -249,7 +344,7 @@ def _apply_step(df: pd.DataFrame, step_type: str, params: dict[str, Any]) -> pd.
         col_name = params["name"]
         expr = params["expression"]
         result = df.copy()
-        result[col_name] = result.eval(expr, engine="python")
+        result[col_name] = _safe_eval_expression(result, expr)
         return result
     if step_type == "visualize":
         return df

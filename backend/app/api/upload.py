@@ -61,6 +61,11 @@ async def upload_file(
             header_row=header_row,
             sheet_index=sheet_index,
         )
+        
+        # Set session context for structured logging correlation
+        from app.logging_config import session_context
+        session_context.set(session_id)
+        
         logger.info(
             "[upload] ingest OK | uid=%s session=%s rows=%d cols=%d",
             uid, session_id, profile.row_count, profile.column_count,

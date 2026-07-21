@@ -614,15 +614,113 @@ Docker Compose mounts a volume at `/root/.aegis` so Parquet files persist across
 | No arbitrary code in DSL | Whitelist of 10 step types with typed params |
 | Raw data isolation | Parquet never sent to LLM |
 | API key protection | Keys in server `.env` only |
-| Upload limits | File size and row count caps |
+| Upload limits | File size and row count caps (`MAX_UPLOAD_MB`) |
 | Expression sandboxing | `compute_column` uses `pandas.eval()`, not `exec()` |
 | Input validation | Pydantic models on every step param |
+| Firebase Authentication | Bearer token auth for user sessions and saved pipeline owner operations |
+| Webhook Secret Hashing | SHA-256 hash stored server-side; raw secret shown once and verified via `secrets.compare_digest` |
+| Webhook IDOR Prevention | Missing header, wrong secret, or invalid ID return identical `404 Not Found` |
+| Webhook Rate Limiting | Token bucket limiter per `pipeline_id` key (`limiter.check(f"webhook_{pipeline_id}")`) |
 
-**Not currently implemented:**
-- User authentication or authorization
-- Encryption at rest for uploaded data
-- Rate limiting on API endpoints
-- Audit logging of data access
+---
+
+## Saved Pipelines & Webhooks
+
+Aegis allows turning chat-generated pipelines into persistent, triggerable webhook endpoints. External tools (e.g. n8n workflows, cron jobs, or third-party backends) can trigger a saved pipeline against fresh data files.
+
+### Secret Hashing & Verification Model
+
+```
+Secret Creation:
+  raw_secret = secrets.token_urlsafe(32)
+  secret_hash = sha256(raw_secret)
+  Stored in DB: secret_hash ONLY (raw secret returned ONCE in creation/rotation response)
+
+Verification:
+  Header received: X-Webhook-Secret: <raw_secret>
+  candidate_hash = sha256(received_raw_secret)
+  Compare: secrets.compare_digest(candidate_hash, stored_secret_hash)
+```
+
+1. **Owner CRUD Operations** (`/api/pipelines/saved`):
+   - Authenticated using Firebase Auth (`Bearer <token>`).
+   - `POST /api/pipelines/saved`: Promotes current session pipeline state to a `SavedPipeline`.
+   - `GET /api/pipelines/saved`: Lists user's saved pipelines (`pipeline_id`, `name`, `trigger_count`, `last_triggered_at`). Never includes secret or hash.
+   - `POST /api/pipelines/saved/{id}/rotate-secret`: Invalidates old secret and returns a newly generated raw secret.
+   - `DELETE /api/pipelines/saved/{id}`: Permanently deletes saved pipeline and invalidates its webhook.
+
+2. **Trigger Endpoint** (`POST /api/webhooks/{pipeline_id}/trigger`):
+   - Unauthenticated execution endpoint designed for external service calls.
+   - Expects `X-Webhook-Secret` header containing the raw secret string.
+   - Accepts multipart data file (`file=@your_data.csv`).
+   - Runs rate limit check (`webhook_{pipeline_id}`).
+   - Ingests dataset, executes stored pipeline DSL steps, updates statistics (`trigger_count`, `last_triggered_at`), cleans up transient session data, and returns execution result JSON.
+
+### Triggering via External Tools (n8n, Cron, curl)
+
+**Example `curl` call:**
+```bash
+curl -X POST "https://your-aegis-domain.com/api/webhooks/<PIPELINE_ID>/trigger" \
+  -H "X-Webhook-Secret: <YOUR_WEBHOOK_SECRET>" \
+  -F "file=@/path/to/fresh_data.csv"
+```
+
+**Response JSON:**
+```json
+{
+  "status": "success",
+  "pipeline_id": "b3a1f...",
+  "pipeline_name": "Weekly Sales Aggregator",
+  "row_count": 1420,
+  "columns": ["region", "total_sales"],
+  "preview": [
+    { "region": "North America", "total_sales": 52100.50 }
+  ],
+  "viz_specs": [...],
+  "execution_log": [...]
+}
+```
+
+### How External Tools & Users Utilize Webhook Payloads
+
+The JSON returned by the trigger webhook contains structured, transformed records and ready-to-render chart figures. Key integration patterns include:
+
+#### 1. Slack / Teams / Email Automated Alerts (n8n, Zapier, Make)
+- **Workflow:** An n8n workflow or cron job posts daily/weekly CSV files to the Aegis webhook endpoint.
+- **Usage:** Extract summary metrics from `preview` (e.g. `total_revenue` or `order_date`) and format an executive alert sent to Slack, Microsoft Teams, or email.
+- **Example Message:**
+  > 📊 **Sales Intelligence Alert**  
+  > Processed 46 daily records. Peak Revenue: **$11,779.05** (2024-01-28).
+
+#### 2. Live Interactive Chart Rendering in Custom Web Portals
+- **Workflow:** Web applications, internal portals (Next.js, React, Retool, Notion embeds), or custom dashboards call the webhook API.
+- **Usage:** Pass `viz_specs[i].figure` straight into `react-plotly.js` or Plotly.js without needing to recalculate aggregations or re-build chart parameters:
+  ```jsx
+  import Plot from 'react-plotly.js';
+
+  <Plot
+    data={response.viz_specs[0].figure.data}
+    layout={response.viz_specs[0].figure.layout}
+  />
+  ```
+
+#### 3. Headless ETL & Database / Data Warehouse Ingestion
+- **Workflow:** Aegis acts as a **headless AI-built ETL engine**. Non-technical users design data pipelines in conversational natural language, and backend jobs execute them on fresh data files.
+- **Usage:** Extract `preview` objects (`order_date`, `total_revenue`) and execute `BULK INSERT` into relational databases (PostgreSQL, MySQL), data warehouses (BigQuery, Snowflake), or Google Sheets.
+
+#### 4. Automated PDF / Executive Report Generation
+- **Workflow:** Weekly scheduled Python or Node.js jobs call the webhook.
+- **Usage:** Combine `preview` table records and rendered `viz_specs` chart images into PDF reports via Puppeteer or ReportLab and distribute them via email to executive stakeholders.
+
+#### Webhook Payload Schema Reference
+
+| Field | Description | Primary Integration Purpose |
+|---|---|---|
+| `row_count` | Total rows output by the final step | Audit logging, threshold alerts, dataset sizing checks |
+| `columns` | List of output column names | Table schema mapping, dynamic UI header rendering |
+| `preview` | List of record objects (up to 50 preview rows) | Database insertion, Slack notifications, CSV export |
+| `viz_specs` | Pre-calculated Plotly JSON charts (`figure.data`, `figure.layout`) | Direct chart rendering in React/Vue/HTML dashboards |
+| `execution_log` | Per-step execution timings and row transformations | Pipeline health monitoring, performance auditing |
 
 ---
 
@@ -631,9 +729,8 @@ Docker Compose mounts a volume at `/root/.aegis` so Parquet files persist across
 1. **Single-process sessions** — in-memory store does not scale across multiple server instances without external session/storage.
 2. **Multi-input merge not supported** — forked branches work, but steps with multiple parents cannot combine data yet.
 3. **Session volatility** — chat history and pipeline plans are lost on server restart (only Parquet survives if `DATA_DIR` is persisted).
-4. **No multi-user access** — sessions are identified by UUID with no ownership model.
-5. **GPT-optimized structured output** — pipeline generation works best with OpenAI models; other providers rely on manual JSON parsing with retry.
-6. **Frontend chat not synced** — the frontend keeps its own message list for display; the authoritative chat history is on the server session (they stay in sync as long as all messages go through the API).
+4. **GPT-optimized structured output** — pipeline generation works best with OpenAI models; other providers rely on manual JSON parsing with retry.
+5. **Frontend chat not synced** — the frontend keeps its own message list for display; the authoritative chat history is on the server session.
 
 ---
 
@@ -646,6 +743,10 @@ Docker Compose mounts a volume at `/root/.aegis` so Parquet files persist across
 | `backend/app/api/upload.py` | File upload endpoint |
 | `backend/app/api/chat.py` | SSE chat endpoint |
 | `backend/app/api/pipeline.py` | Pipeline CRUD, generate, execute, logs |
+| `backend/app/api/saved_pipelines.py` | Owner CRUD & secret rotation for saved pipelines |
+| `backend/app/api/webhooks.py` | Unauthenticated webhook trigger endpoint |
+| `backend/app/services/saved_pipeline_store.py` | Firestore + in-memory store for saved pipelines |
+| `backend/app/models/saved_pipeline.py` | SavedPipeline model & SHA-256 secret hashing |
 | `backend/app/services/agent.py` | LiteLLM chat + pipeline generation |
 | `backend/app/services/executor.py` | pandas pipeline execution |
 | `backend/app/services/viz.py` | Plotly chart builder |
@@ -655,8 +756,10 @@ Docker Compose mounts a volume at `/root/.aegis` so Parquet files persist across
 | `frontend/src/App.tsx` | Root layout and state |
 | `frontend/src/lib/api.ts` | Backend HTTP/SSE client |
 | `frontend/src/components/PipelineCanvas.tsx` | React Flow editor |
+| `frontend/src/components/SavedPipelinesModal.tsx` | Webhook pipeline manager & secret copy UI |
 | `frontend/src/components/VizDashboard.tsx` | Results display |
 
 ---
 
 *This document reflects the architecture as of the current codebase. For setup instructions, see [README.md](../README.md).*
+

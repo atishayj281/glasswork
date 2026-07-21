@@ -168,29 +168,16 @@ def deserialize_session(data: dict) -> SessionState:
 
 
 
+from app.services.firestore import get_firestore_client
+
+
 class SessionStore:
     def __init__(self) -> None:
         self._local_sessions: dict[str, SessionState] = {}
-        self._firestore_db = None
-        self._firestore_checked = False
         DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     def _get_firestore(self):
-        if self._firestore_checked:
-            return self._firestore_db
-        
-        self._firestore_checked = True
-        try:
-            import firebase_admin
-            from firebase_admin import firestore
-            firebase_admin.get_app()
-            self._firestore_db = firestore.client()
-            logging.getLogger(__name__).info("Firestore session store initialized successfully")
-        except Exception as e:
-            logging.getLogger(__name__).warning(
-                f"Firestore could not be initialized, falling back to local memory: {e}"
-            )
-        return self._firestore_db
+        return get_firestore_client()
 
     def create(
         self,
@@ -247,9 +234,14 @@ class SessionStore:
                     )
 
     def claim(self, session_id: str, uid: str) -> SessionState | None:
-        """Associate an anonymous session with a logged-in user."""
+        """Associate an anonymous session with a logged-in user.
+
+        Raises ValueError if the session is already claimed by another user.
+        """
         state = self.get(session_id)
         if state:
+            if state.uid is not None and state.uid != uid:
+                raise ValueError("Session is already claimed by another user")
             state.uid = uid
             self.save(state)
         return state
@@ -281,6 +273,13 @@ class SessionStore:
                     return state
             except Exception as e:
                 logging.getLogger(__name__).error(f"Failed to get session {session_id} from Firestore: {e}")
+                # Fallback to local cache if Firestore is down/fails
+                state = self._local_sessions.get(session_id)
+                if state:
+                    if state.is_expired():
+                        self.delete(session_id)
+                        return None
+                    return state
                 return None
 
                 

@@ -95,3 +95,25 @@ export interface SavedPipeline {
   createdAt?: { seconds: number };
   updatedAt?: { seconds: number };
 }
+
+export interface SavedPipelineItem {
+  pipeline_id: string;
+  uid: string;
+  name: string;
+  pipeline: PipelinePlan;
+  created_at: string;
+  last_triggered_at: string | null;
+  trigger_count: number;
+  status: "active" | "inactive";
+}
+
+export interface SavedPipelineCreateResponse extends SavedPipelineItem {
+  webhook_secret: string;
+}
+
+export interface RotateSecretResponse {
+  pipeline_id: string;
+  webhook_secret: string;
+  rotated_at: string;
+}
+

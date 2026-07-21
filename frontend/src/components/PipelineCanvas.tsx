@@ -28,6 +28,7 @@ interface Props {
   refreshKey: number;
   onExecuted: (result: ExecutionResult) => void;
   onPipelineChange?: (plan: PipelinePlan) => void;
+  onOpenWebhooks?: () => void;
   processOnClient?: boolean;
 }
 
@@ -64,7 +65,7 @@ function flowToPlan(
   };
 }
 
-export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPipelineChange, processOnClient }: Props) {
+export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPipelineChange, onOpenWebhooks, processOnClient }: Props) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [planName, setPlanName] = useState("Untitled Pipeline");
@@ -206,6 +207,18 @@ export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPi
           <Button variant="secondary" size="sm" onClick={handleSave} disabled={!sessionId || saving}>
             {saving ? "Saving..." : "Save"}
           </Button>
+          {onOpenWebhooks && (
+            <Button
+              id="toolbar-save-webhook-btn"
+              variant="secondary"
+              size="sm"
+              onClick={onOpenWebhooks}
+              disabled={!sessionId}
+              title="Save & configure persistent webhook trigger for this pipeline"
+            >
+              ⚡ Save Webhook
+            </Button>
+          )}
           <Button
             variant="primary"
             size="sm"
