@@ -83,6 +83,7 @@ fill_na: { "columns": ["revenue"], "value": 0 }
 cast_type: { "column": "date", "dtype": "datetime" }
 deduplicate: { "subset": ["region", "date"] }
 compute_column: { "name": "tax", "expression": "revenue * 0.1" }
+IMPORTANT FOR compute_column: The expression MUST be a pure arithmetic or comparison expression using column names, numbers, and basic operators (+, -, *, /). Function calls, method calls, string methods, or date functions (e.g. month(), strftime(), dt.month) are STRICTLY FORBIDDEN and will cause backend pipeline execution to fail.
 
 EXAMPLE:
 {
@@ -207,7 +208,12 @@ async def chat_stream(
     ]
 
     logger.info(
-        "Chat stream prompt | session=%s model=%s user_message=%r\n%s",
+        "Chat stream prompt | session=%s model=%s",
+        session.session_id,
+        LITELLM_MODEL,
+    )
+    logger.debug(
+        "Chat stream prompt details | session=%s model=%s user_message=%r\n%s",
         session.session_id,
         LITELLM_MODEL,
         user_message,
@@ -228,7 +234,11 @@ async def chat_stream(
             yield delta
 
     logger.info(
-        "Chat stream output | session=%s\n%s",
+        "Chat stream output complete | session=%s",
+        session.session_id,
+    )
+    logger.debug(
+        "Chat stream output text | session=%s\n%s",
         session.session_id,
         full_response,
     )
@@ -246,7 +256,14 @@ async def generate_pipeline(session: SessionState, intent: str | None = None) ->
         messages = _build_generation_messages(session, intent_msg, last_error)
 
         logger.info(
-            "Pipeline generation prompt | session=%s model=%s attempt=%d structured=%s intent=%r\n%s",
+            "Pipeline generation prompt | session=%s model=%s attempt=%d structured=%s",
+            session.session_id,
+            LITELLM_MODEL,
+            attempt + 1,
+            use_structured,
+        )
+        logger.debug(
+            "Pipeline generation prompt details | session=%s model=%s attempt=%d structured=%s intent=%r\n%s",
             session.session_id,
             LITELLM_MODEL,
             attempt + 1,
@@ -257,6 +274,10 @@ async def generate_pipeline(session: SessionState, intent: str | None = None) ->
 
         content = await _call_llm(messages, use_structured=use_structured)
         logger.info(
+            "Pipeline generation raw LLM response received | session=%s",
+            session.session_id,
+        )
+        logger.debug(
             "Pipeline generation raw LLM response | session=%s\n%s",
             session.session_id,
             content,
@@ -266,7 +287,13 @@ async def generate_pipeline(session: SessionState, intent: str | None = None) ->
             data = _parse_pipeline_content(content)
             plan = _validate_pipeline(data, strict=use_structured)
             logger.info(
-                "Pipeline generation output | session=%s\n%s",
+                "Pipeline generation output success | session=%s name=%r steps=%d",
+                session.session_id,
+                plan.name,
+                len(plan.steps),
+            )
+            logger.debug(
+                "Pipeline generation output detail | session=%s\n%s",
                 session.session_id,
                 plan.model_dump_json(indent=2),
             )

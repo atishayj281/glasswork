@@ -8,6 +8,7 @@ from app.services.executor import (
     _apply_step,
     _build_graph,
     _resolve_input,
+    _safe_eval_expression,
     _topological_order,
     execute_pipeline,
 )
@@ -272,3 +273,160 @@ def test_step_error_includes_context():
 
     with pytest.raises(ValueError, match="Step 'Bad groupby' \\(g1\\)"):
         execute_pipeline(_sample_df(), plan)
+
+
+# ---------------------------------------------------------------------------
+# _safe_eval_expression — security tests
+# ---------------------------------------------------------------------------
+
+class TestSafeEvalExpression:
+    """Verify that _safe_eval_expression is both correct and attack-resistant."""
+
+    def _df(self) -> pd.DataFrame:
+        """Minimal DataFrame for expression evaluation tests."""
+        return pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0, 6.0]})
+
+    def _revenue_df(self) -> pd.DataFrame:
+        return pd.DataFrame({"revenue": [100.0, 200.0, 300.0]})
+
+    # ------------------------------------------------------------------
+    # Legitimate expressions — must compute correctly
+    # ------------------------------------------------------------------
+
+    def test_simple_multiply(self):
+        df = self._revenue_df()
+        result = _safe_eval_expression(df, "revenue * 1.1")
+        expected = pd.Series([110.0, 220.0, 330.0], name="revenue")
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_arithmetic_with_two_columns(self):
+        df = self._df()
+        result = _safe_eval_expression(df, "a + b")
+        pd.testing.assert_series_equal(result, pd.Series([5.0, 7.0, 9.0]), check_names=False)
+
+    def test_parenthesized_expression(self):
+        """Regression: the fork-pipeline uses (a - b) / a."""
+        df = self._df()
+        result = _safe_eval_expression(df, "(a - b) / a")
+        assert len(result) == 3
+        # (1-4)/1 = -3, (2-5)/2 = -1.5, (3-6)/3 = -1.0
+        assert abs(result.iloc[0] - (-3.0)) < 1e-9
+        assert abs(result.iloc[2] - (-1.0)) < 1e-9
+
+    def test_comparison_expression(self):
+        df = self._df()
+        result = _safe_eval_expression(df, "a > b")
+        assert list(result) == [False, False, False]
+
+    def test_floor_div_mod_pow(self):
+        df = self._df()
+        _safe_eval_expression(df, "a ** 2")  # must not raise
+        _safe_eval_expression(df, "b // a")
+        _safe_eval_expression(df, "b % a")
+
+    def test_unary_minus(self):
+        df = self._df()
+        result = _safe_eval_expression(df, "-a")
+        assert list(result) == [-1.0, -2.0, -3.0]
+
+    def test_regression_compute_column_in_pipeline(self):
+        """The existing fork plan's compute_column step must still work end-to-end."""
+        result = execute_pipeline(_sample_df(), _fork_plan())
+        # profit_margin column is produced in step s5
+        s5_log = next(log for log in result.execution_log if log.step_id == "s5")
+        assert s5_log.rows_out > 0
+
+    # ------------------------------------------------------------------
+    # Malicious expressions — must raise ValueError, no internal leakage
+    # ------------------------------------------------------------------
+
+    def _assert_blocked(self, expr: str, *, df: pd.DataFrame | None = None) -> None:
+        """Assert that expr raises ValueError and the message is safe."""
+        _df = df if df is not None else self._df()
+        with pytest.raises(ValueError) as exc_info:
+            _safe_eval_expression(_df, expr)
+        msg = str(exc_info.value)
+        # The error must NOT expose internal Python object representations.
+        for leak_marker in ("<class", "<built", "__subclasses__", "object at 0x", "<module"):
+            assert leak_marker not in msg, (
+                f"Error message leaks internal repr for {expr!r}: {msg!r}"
+            )
+
+    def test_blocks_attribute_access(self):
+        """a.__class__ must be rejected at the AST-walk stage."""
+        self._assert_blocked("a.__class__")
+
+    def test_blocks_dunder_chain_rce_vector(self):
+        """Classic sandbox-escape chain must be blocked."""
+        self._assert_blocked(
+            "a.values.__class__.__base__.__subclasses__()"
+        )
+
+    def test_blocks_function_call_builtin(self):
+        """sum(a) must be blocked — Call node is disallowed."""
+        self._assert_blocked("sum(a)")
+
+    def test_blocks_function_call_on_series(self):
+        """a.tolist() must be blocked — both Attribute and Call."""
+        self._assert_blocked("a.tolist()")
+
+    def test_blocks_subscript(self):
+        """a[0] must be blocked — Subscript node is disallowed."""
+        self._assert_blocked("a[0]")
+
+    def test_blocks_lambda(self):
+        """lambda x: x must be blocked."""
+        self._assert_blocked("(lambda x: x)(a)")
+
+    def test_blocks_unknown_name(self):
+        """Names not in df.columns must raise ValueError."""
+        df = self._df()  # has columns 'a' and 'b' only
+        with pytest.raises(ValueError, match="Unknown column"):
+            _safe_eval_expression(df, "revenue * 1.1")
+
+    def test_blocks_globals_builtins_access(self):
+        """__builtins__ or __import__ referenced directly must be blocked
+        because neither 'builtins' nor '__import__' exists in df.columns."""
+        self._assert_blocked("__builtins__")
+        self._assert_blocked("__import__")
+
+    def test_error_message_names_construct(self):
+        """The ValueError for a blocked node must name the construct."""
+        df = self._df()
+        with pytest.raises(ValueError, match="'Attribute'"):
+            _safe_eval_expression(df, "a.__class__")
+        with pytest.raises(ValueError, match="'Call'"):
+            _safe_eval_expression(df, "sum(a)")
+        with pytest.raises(ValueError, match="'Subscript'"):
+            _safe_eval_expression(df, "a[0]")
+
+    def test_additional_adversarial_expressions(self):
+        df = self._df()
+        # 1. Walrus assignment: (x := 1)
+        with pytest.raises(ValueError, match="NamedExpr"):
+            _safe_eval_expression(df, "(x := 1)")
+
+        # 2. Comprehension: [c for c in ()]
+        with pytest.raises(ValueError, match="ListComp"):
+            _safe_eval_expression(df, "[c for c in ()]")
+
+        # 3. f-string: f'{1}'
+        with pytest.raises(ValueError, match="JoinedStr|FormattedValue"):
+            _safe_eval_expression(df, "f'{1}'")
+
+        # 4. Chained comparison: 1 == 1 == 1 (decide and assert: allowed and safe)
+        result = _safe_eval_expression(df, "1 == 1 == 1")
+        assert result is True or (isinstance(result, pd.Series) and result.iloc[0] is True)
+
+        # 5. Column name colliding with builtin: e.g. column literally named "len"
+        df_colliding = pd.DataFrame({"len": [10, 20, 30], "sum": [1, 2, 3]})
+        # Direct reference should resolve to the series, not the builtin
+        res_len = _safe_eval_expression(df_colliding, "len")
+        pd.testing.assert_series_equal(res_len, df_colliding["len"])
+
+        res_sum = _safe_eval_expression(df_colliding, "sum + 5")
+        pd.testing.assert_series_equal(res_sum, pd.Series([6, 7, 8]), check_names=False)
+
+        # And calling them must still be blocked at AST parse stage as 'Call'
+        with pytest.raises(ValueError, match="'Call'"):
+            _safe_eval_expression(df_colliding, "len(sum)")

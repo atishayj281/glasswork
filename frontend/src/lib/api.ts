@@ -143,3 +143,37 @@ export function streamChat(
 
   return () => controller.abort();
 }
+
+import type {
+  SavedPipelineItem,
+  SavedPipelineCreateResponse,
+  RotateSecretResponse,
+} from "../types";
+
+export async function promotePipeline(sessionId: string, name?: string) {
+  const { data } = await api.post<SavedPipelineCreateResponse>("/pipelines/saved", {
+    session_id: sessionId,
+    name,
+  });
+  return data;
+}
+
+export async function listSavedPipelines() {
+  const { data } = await api.get<SavedPipelineItem[]>("/pipelines/saved");
+  return data;
+}
+
+export async function deleteSavedPipeline(pipelineId: string) {
+  const { data } = await api.delete<{ status: string; pipeline_id: string }>(
+    `/pipelines/saved/${pipelineId}`,
+  );
+  return data;
+}
+
+export async function rotatePipelineSecret(pipelineId: string) {
+  const { data } = await api.post<RotateSecretResponse>(
+    `/pipelines/saved/${pipelineId}/rotate-secret`,
+  );
+  return data;
+}
+
