@@ -37,10 +37,8 @@ async def trigger_saved_pipeline(
     x_webhook_secret: str | None = Header(None, alias="X-Webhook-Secret"),
 ) -> WebhookTriggerResponse:
     """Trigger a saved pipeline with an uploaded data file."""
-    # 1. Rate Limit Check (uses pipeline_id as key)
-    limiter.check(f"webhook_{pipeline_id}")
 
-    # 2. Secret authentication and existence verification
+    # 1. Secret authentication and existence verification
     # Always return exact same 404 whether header is missing, pipeline is missing, or secret is wrong.
     if not x_webhook_secret:
         raise HTTPException(
@@ -54,6 +52,9 @@ async def trigger_saved_pipeline(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pipeline not found",
         )
+
+    # 2. Rate Limit Check (uses pipeline_id as key)
+    limiter.check(f"webhook_{pipeline_id}")
 
     # 3. File size check (reuses MAX_UPLOAD_MB)
     content = await file.read()

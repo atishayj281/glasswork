@@ -38,5 +38,34 @@ Data is stored using a dual-storage setup to minimize cost while ensuring durabi
 
 ---
 
+## Webhook Authentication & Security Model
+
+Persistent Saved Pipelines expose an unauthenticated trigger endpoint (`POST /api/webhooks/{pipeline_id}/trigger`) designed for external automated tool integration (n8n, Zapier, cron, custom backends).
+
+### 1. Secret-Based Authentication (Not Session-Based)
+* **Auth Header**: Webhooks are authorized via the `X-Webhook-Secret` HTTP header rather than user session tokens or Firebase Bearer tokens.
+* **Secret Generation**: Raw secrets are generated server-side using cryptographically secure random tokens (`secrets.token_urlsafe(32)`).
+* **SHA-256 Hashing at Rest**: Aegis stores **only the SHA-256 hash** of the secret (`secret_hash`) in the database. The raw secret string is displayed **only once** to the owner upon creation or secret rotation and is never logged or returned in subsequent `GET` requests.
+* **Timing Attack Prevention**: Secret verification uses constant-time comparison (`secrets.compare_digest`) to prevent timing side-channel attacks.
+* **IDOR & Enumeration Prevention**: Any request with a missing header, invalid secret, inactive pipeline, or non-existent pipeline ID receives the exact same response: `404 Not Found (detail="Pipeline not found")`.
+* **Rate Limiting**: Webhook triggers are rate-limited per pipeline ID (`webhook_{pipeline_id}`) using a token bucket limiter to prevent denial-of-service or brute-force attempts.
+
+---
+
+## Data Returned on Webhook Triggers (Data Scope)
+
+It is important to distinguish between **Data Sent to the LLM** and **Data Returned to Webhook Callers**:
+
+1. **Data Sent to the LLM (Metadata Only)**:
+   * During chat conversation and pipeline generation, Aegis strictly sends **only dataset metadata** (column names, types, null rates, row count) to the external LLM provider. Raw row data is **never** sent to the LLM.
+
+2. **Data Returned to Webhook Callers (Transformed Output Data)**:
+   * The "metadata only to the LLM" restriction does **NOT** apply to the HTTP response returned to a valid webhook caller.
+   * When an external service posts a data file to `POST /api/webhooks/{pipeline_id}/trigger` with a valid `X-Webhook-Secret`, Aegis executes the saved pipeline locally using pandas and **returns the actual transformed dataset output rows (`preview`), columns, row count, Plotly chart figures, and step execution logs** back to the webhook caller in the HTTP response body.
+   * This behavior is intentional, allowing external automation workflows to consume the transformed business data.
+
+---
+
 ## Reporting a Vulnerability
 If you discover a security vulnerability within this project, please send an email to security@example.com rather than opening a public issue. We will acknowledge receipt of your report and provide a timeline for triage and resolution.
+
