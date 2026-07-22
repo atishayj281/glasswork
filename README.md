@@ -8,6 +8,7 @@ An agentic data analysis platform that accepts CSV/Excel uploads, analyzes datas
 - **Conversational intent gathering** — Chat with the agent to describe what you want to analyze
 - **Visual pipeline editor** — React Flow canvas with drag-and-drop, editable step parameters
 - **10 pipeline operations** — filter, groupby, sort, visualize, and more
+- **Persistent Saved Webhooks** — Save pipelines and trigger them via external tools (n8n, Zapier, cron) against fresh data files
 - **Execution transparency** — Step-by-step logs showing row counts at each stage
 - **Interactive charts** — Plotly-powered bar, line, scatter, pie, histogram, and heatmap charts
 - **Provider-agnostic LLM** — Switch models via LiteLLM (OpenAI, Anthropic, Ollama, etc.)
@@ -99,7 +100,21 @@ docker compose up --build
 3. **Generate Pipeline** — the agent creates a visual processing DAG
 4. **Edit** — click any node to modify parameters, add/remove steps
 5. **Run** — execute the pipeline and view charts, data preview, and step logs
-6. **Iterate** — ask the agent to revise, edit the pipeline, and re-run
+6. **Save as Webhook** — make the pipeline persistent and triggerable via external tools
+7. **Iterate** — ask the agent to revise, edit the pipeline, and re-run
+
+## Saved Pipelines & Webhooks
+
+You can turn any chat-generated pipeline into a persistent webhook endpoint.
+
+```bash
+# Example curl call to trigger a saved pipeline against fresh data
+curl -X POST "http://localhost:8000/api/webhooks/<PIPELINE_ID>/trigger" \
+  -H "X-Webhook-Secret: <YOUR_WEBHOOK_SECRET>" \
+  -F "file=@/path/to/fresh_data.csv"
+```
+
+For full setup guides, n8n HTTP Request node configuration details, and JSON response payload schemas, see [docs/WEBHOOKS.md](docs/WEBHOOKS.md).
 
 ## API Endpoints
 
@@ -112,6 +127,11 @@ docker compose up --build
 | GET/PATCH | `/api/pipeline/{id}` | Read/update pipeline |
 | POST | `/api/pipeline/{id}/execute` | Execute pipeline |
 | GET | `/api/pipeline/{id}/logs` | Execution history |
+| POST | `/api/pipelines/saved` | Save active pipeline as persistent webhook |
+| GET | `/api/pipelines/saved` | List user's saved pipelines |
+| DELETE | `/api/pipelines/saved/{id}` | Delete saved pipeline |
+| POST | `/api/pipelines/saved/{id}/rotate-secret` | Rotate webhook secret key |
+| POST | `/api/webhooks/{id}/trigger` | Trigger saved pipeline with fresh dataset |
 
 ## Pipeline Step Types
 
@@ -133,5 +153,7 @@ docker compose up --build
 - Pipeline DSL uses a whitelist of operations — no arbitrary code execution
 - `compute_column` uses pandas `eval` with restricted scope
 - Raw data never sent to the LLM
+- Webhook secret verification uses constant-time string comparison (`secrets.compare_digest`) with SHA-256 server-side secret hashing
 - API keys stored server-side only
 - File size and row limits enforced
+
