@@ -1,4 +1,4 @@
-# Aegis — Agentic Data Platform
+# Glasswork — Agentic Data Platform
 
 An agentic data analysis platform that accepts CSV/Excel uploads, analyzes dataset metadata (headers only — no raw row data sent to the LLM), converses with users to understand their goals, generates editable data processing pipelines, and renders insights with interactive visualizations.
 

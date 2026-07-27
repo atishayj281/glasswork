@@ -31,7 +31,17 @@ class SessionState:
     execution_result: dict | None = None
 
     def is_expired(self) -> bool:
-        return datetime.utcnow() - self.created_at > timedelta(hours=SESSION_TTL_HOURS)
+        retention_days = 1
+        if self.uid:
+            try:
+                from app.billing.tiers import get_tier_config
+                from app.services.user_store import user_store
+                sub = user_store.get_subscription(self.uid)
+                tier_cfg = get_tier_config(sub.tier)
+                retention_days = tier_cfg.session_retention_days
+            except Exception:
+                retention_days = 1
+        return datetime.utcnow() - self.created_at > timedelta(days=retention_days)
 
 
 def _firestore_json_default(obj: Any) -> Any:
@@ -359,6 +369,48 @@ class SessionStore:
                 return None
                 
         return pd.read_parquet(local_path)
+
+    def list_for_user(self, uid: str, limit: int = 50) -> list["SessionState"]:
+        """Return a recency-sorted list of sessions owned by *uid*.
+
+        Queries Firestore first (authoritative cross-process view).  Falls back
+        to the local in-memory cache when Firestore is unavailable.  Results are
+        filtered to non-expired sessions only.
+        """
+        sessions: list[SessionState] = []
+        firestore_db = self._get_firestore()
+        if firestore_db:
+            try:
+                docs = (
+                    firestore_db.collection("sessions")
+                    .where("uid", "==", uid)
+                    .order_by("created_at", direction="DESCENDING")
+                    .limit(limit)
+                    .stream()
+                )
+                for doc in docs:
+                    data = doc.to_dict()
+                    try:
+                        state = deserialize_session(data)
+                        if not state.is_expired():
+                            sessions.append(state)
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning(
+                            "Skipping malformed session doc %s: %s", doc.id, exc
+                        )
+                return sessions
+            except Exception as exc:
+                logging.getLogger(__name__).error(
+                    "Failed to list sessions for uid=%s from Firestore: %s", uid, exc
+                )
+                # fall through to local cache
+
+        # Local-cache fallback (dev / Firestore-down scenario)
+        for state in self._local_sessions.values():
+            if state.uid == uid and not state.is_expired():
+                sessions.append(state)
+        sessions.sort(key=lambda s: s.created_at, reverse=True)
+        return sessions[:limit]
 
     def _purge_expired(self) -> None:
         expired = [sid for sid, s in self._local_sessions.items() if s.is_expired()]

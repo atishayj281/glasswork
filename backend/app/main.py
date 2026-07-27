@@ -3,6 +3,7 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import asyncio
 import base64
 import json
 import logging
@@ -13,16 +14,48 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 import firebase_admin
 from firebase_admin import credentials
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, pipeline, saved_pipelines, upload, webhooks
+from app.api import billing, chat, pipeline, saved_pipelines, upload, webhooks
 from app.config import CORS_ORIGIN, FIREBASE_STORAGE_BUCKET
 from app.logging_config import setup_logging
 from app.middleware.auth import get_current_user
 from app.services.session import session_store
 
 setup_logging()
+
+_gc_logger = logging.getLogger("app.gc")
+
+async def _session_gc_loop() -> None:
+    """Background coroutine that purges expired sessions every 30 minutes.
+
+    Sessions use tier-aware retention (Explorer 1d, Analyst 7d, Studio 30d).
+    This loop ensures expired sessions are cleaned up in near-real-time without
+    relying solely on the on-demand expiry check inside session_store.get().
+    """
+    while True:
+        try:
+            await asyncio.sleep(30 * 60)  # 30 minutes
+            session_store._purge_expired()
+            _gc_logger.info("[gc] session purge complete")
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            _gc_logger.error("[gc] session purge failed: %s", exc)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    gc_task = asyncio.create_task(_session_gc_loop())
+    _gc_logger.info("[gc] session expiry GC loop started (interval=30min)")
+    yield
+    gc_task.cancel()
+    try:
+        await gc_task
+    except asyncio.CancelledError:
+        pass
 
 
 def _init_sentry(dsn: str) -> bool:
@@ -102,7 +135,7 @@ def _init_firebase() -> None:
 
 _init_firebase()
 
-app = FastAPI(title="Aegis Agentic Data Platform", version="0.1.0")
+app = FastAPI(title="Aegis Agentic Data Platform", version="0.1.0", lifespan=_lifespan)
 
 
 def _compute_cors_origins(cors_origin: str, environment: str | None) -> list[str]:
@@ -137,6 +170,8 @@ app.include_router(chat.router, prefix="/api", tags=["chat"])
 app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
 app.include_router(saved_pipelines.router, prefix="/api", tags=["saved_pipelines"])
 app.include_router(webhooks.router, prefix="/api", tags=["webhooks"])
+app.include_router(billing.router, prefix="/api", tags=["billing"])
+
 
 
 @app.post("/api/sessions/{session_id}/claim", tags=["session"])
@@ -155,6 +190,53 @@ async def claim_session(session_id: str, uid: str = Depends(get_current_user)):
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"status": "ok", "session_id": session_id, "uid": uid}
+
+
+from pydantic import BaseModel as _BaseModel
+from datetime import datetime as _dt
+
+
+class SessionSummaryResponse(_BaseModel):
+    session_id: str
+    file_name: str
+    pipeline_name: str | None
+    created_at: str  # ISO-8601
+    chat_message_count: int
+    has_result: bool
+
+
+@app.get("/api/sessions", tags=["session"], response_model=list[SessionSummaryResponse])
+async def list_my_sessions(uid: str = Depends(get_current_user)):
+    """Return a recency-sorted list of the caller's active (non-expired) sessions."""
+    states = session_store.list_for_user(uid, limit=50)
+    return [
+        SessionSummaryResponse(
+            session_id=s.session_id,
+            file_name=s.file_name,
+            pipeline_name=s.pipeline.name if s.pipeline else None,
+            created_at=s.created_at.isoformat() + "Z",
+            chat_message_count=len(s.chat_history),
+            has_result=s.execution_result is not None,
+        )
+        for s in states
+    ]
+
+
+from app.middleware.auth import get_current_user_optional as _get_user_opt
+from app.middleware.auth import require_session_access as _req_access
+from app.models.schema import DatasetProfile as _DatasetProfile
+
+
+@app.get("/api/session/{session_id}/profile", tags=["session"], response_model=_DatasetProfile)
+async def get_session_profile(
+    session_id: str,
+    uid: str | None = Depends(_get_user_opt),
+):
+    """Return the DatasetProfile (schema) of a session without re-uploading the file."""
+    state = _req_access(session_id, uid)
+    if not state.profile:
+        raise HTTPException(404, "Session has no profile — file may not have been ingested yet")
+    return state.profile
 
 
 @app.get("/api/me/budget", tags=["budget"])
@@ -213,14 +295,37 @@ async def health():
     except Exception as e:
         supabase_status = f"unhealthy: {e}"
 
-    is_unhealthy = "unhealthy" in firestore_status or "unhealthy" in supabase_status
+    redis_status = "disabled"
+    try:
+        from app.services.redis_client import get_redis_client
+        redis = get_redis_client()
+        if redis:
+            redis_status = "ok" if redis.is_available() else "unhealthy: ping failed"
+    except Exception as e:
+        redis_status = f"unhealthy: {e}"
+
+    from app.services.circuit_breaker import litellm_circuit_breaker, supabase_circuit_breaker, firebase_circuit_breaker
+    cb_statuses = {
+        "litellm": litellm_circuit_breaker.get_status(),
+        "supabase": supabase_circuit_breaker.get_status(),
+        "firebase": firebase_circuit_breaker.get_status(),
+    }
+
+    is_unhealthy = (
+        "unhealthy" in firestore_status
+        or "unhealthy" in supabase_status
+        or "unhealthy" in redis_status
+        or any(cb["state"] == "OPEN" for cb in cb_statuses.values())
+    )
     status_str = "degraded" if is_unhealthy else "ok"
 
     response_data = {
         "status": status_str,
         "details": {
             "firestore": firestore_status,
-            "supabase": supabase_status
+            "supabase": supabase_status,
+            "redis": redis_status,
+            "circuit_breakers": cb_statuses,
         }
     }
 

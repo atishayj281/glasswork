@@ -2,7 +2,13 @@ import { useState } from "react";
 import type { FirebaseError } from "firebase/app";
 import { useAuth } from "../hooks/useAuth";
 
-export default function AuthPage() {
+interface AuthPageProps {
+  onAuthSuccess?: () => void;
+  contextMessage?: string;
+  onNavigateBack?: () => void;
+}
+
+export default function AuthPage({ onAuthSuccess, contextMessage, onNavigateBack }: AuthPageProps = {}) {
   const { login, register, loginWithGoogle } = useAuth();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
@@ -17,6 +23,7 @@ export default function AuthPage() {
     try {
       if (mode === "login") await login(email, password);
       else await register(email, password);
+      onAuthSuccess?.();
     } catch (err) {
       const fe = err as FirebaseError;
       setError(fe.message ?? "Authentication failed");
@@ -30,6 +37,7 @@ export default function AuthPage() {
     setError(null);
     try {
       await loginWithGoogle();
+      onAuthSuccess?.();
     } catch (err) {
       const fe = err as FirebaseError;
       setError(fe.message ?? "Google sign-in failed");
@@ -47,10 +55,23 @@ export default function AuthPage() {
       </div>
 
       <div className="w-full max-w-md px-6 relative z-10">
+        {/* Back navigation */}
+        {onNavigateBack && (
+          <button
+            onClick={onNavigateBack}
+            className="flex items-center gap-1.5 text-xs font-mono text-slate-500 hover:text-slate-300 transition-colors mb-6"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            Back to Landing Page
+          </button>
+        )}
+
         {/* Logo */}
         <div className="text-center mb-10">
           <h1 className="font-display text-4xl font-bold tracking-[0.3em] gradient-text mb-2">
-            AEGIS
+            GLASSWORK
           </h1>
           <p className="font-mono text-xs text-slate-500 tracking-widest uppercase">
             Agentic Data Platform
@@ -59,6 +80,16 @@ export default function AuthPage() {
 
         {/* Card */}
         <div className="glass-panel rounded-2xl p-8 border border-slate-700/50 shadow-2xl">
+          {/* Upgrade intent banner */}
+          {contextMessage && (
+            <div className="flex items-start gap-2 mb-6 p-3 rounded-xl bg-[#F5A623]/10 border border-[#F5A623]/30">
+              <svg className="w-4 h-4 text-[#F5A623] shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              <p className="text-xs font-mono text-[#F5A623] leading-relaxed">{contextMessage}</p>
+            </div>
+          )}
+
           {/* Mode toggle */}
           <div className="flex bg-slate-800/60 rounded-xl p-1 mb-8">
             {(["login", "register"] as const).map((m) => (

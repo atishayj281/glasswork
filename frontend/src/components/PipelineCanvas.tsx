@@ -20,6 +20,7 @@ import StepNode from "./StepNode";
 import StepEditor from "./StepEditor";
 import Button from "./ui/Button";
 import EmptyState from "./ui/EmptyState";
+import ProgressBar from "./ui/ProgressBar";
 
 const nodeTypes = { stepNode: StepNode };
 
@@ -30,6 +31,7 @@ interface Props {
   onPipelineChange?: (plan: PipelinePlan) => void;
   onOpenWebhooks?: () => void;
   processOnClient?: boolean;
+  onRefreshBilling?: () => void;
 }
 
 function planToFlow(plan: PipelinePlan): { nodes: Node[]; edges: Edge[] } {
@@ -65,13 +67,16 @@ function flowToPlan(
   };
 }
 
-export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPipelineChange, onOpenWebhooks, processOnClient }: Props) {
+export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPipelineChange, onOpenWebhooks, processOnClient, onRefreshBilling }: Props) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [planName, setPlanName] = useState("Untitled Pipeline");
   const [selectedStep, setSelectedStep] = useState<PipelineStep | null>(null);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadingPipeline, setLoadingPipeline] = useState(false);
+  const [runProgress, setRunProgress] = useState(0);
+  const [runStatus, setRunStatus] = useState("");
   const [dataset, setDataset] = useState<Record<string, any>[] | null>(null);
 
   useEffect(() => {
@@ -80,13 +85,18 @@ export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPi
 
   const loadPipeline = useCallback(async () => {
     if (!sessionId) return;
-    const plan = await getPipeline(sessionId);
-    if (plan) {
-      setPlanName(plan.name);
-      const { nodes: n, edges: e } = planToFlow(plan);
-      setNodes(n);
-      setEdges(e);
-      onPipelineChange?.(plan);
+    setLoadingPipeline(true);
+    try {
+      const plan = await getPipeline(sessionId);
+      if (plan) {
+        setPlanName(plan.name);
+        const { nodes: n, edges: e } = planToFlow(plan);
+        setNodes(n);
+        setEdges(e);
+        onPipelineChange?.(plan);
+      }
+    } finally {
+      setLoadingPipeline(false);
     }
   }, [sessionId, setNodes, setEdges, onPipelineChange]);
 
@@ -122,27 +132,50 @@ export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPi
   const handleRun = async () => {
     if (!sessionId) return;
     setRunning(true);
+    setRunProgress(5);
+    setRunStatus("Syncing pipeline state…");
     try {
       await handleSave();
-      
+      setRunProgress(20);
+
       if (processOnClient) {
+        setRunStatus("Downloading dataset…");
+        setRunProgress(35);
         let currentDataset = dataset;
         if (!currentDataset) {
           currentDataset = await downloadDataset(sessionId);
           setDataset(currentDataset);
         }
+        setRunProgress(60);
+        setRunStatus("Executing pipeline locally…");
         const plan = flowToPlan(planName, nodes, edges);
         const result = executePipelineLocally(currentDataset, plan);
+        setRunProgress(100);
+        setRunStatus("Done!");
         onExecuted(result);
+        // Local execution records usage instantly — refresh immediately
+        onRefreshBilling?.();
       } else {
+        setRunStatus("Submitting to backend…");
         await executePipeline(sessionId);
-        
+        // record_usage fires on the backend immediately at /execute
+        // Refresh billing now to capture the run count increment
+        onRefreshBilling?.();
+        setRunProgress(40);
+        setRunStatus("Waiting for results…");
+
         let done = false;
         let pollCount = 0;
-        while (!done && pollCount < 100) {
+        const MAX_POLLS = 100;
+        while (!done && pollCount < MAX_POLLS) {
           await new Promise((resolve) => setTimeout(resolve, 1500));
           const statusRes = await getExecutionStatus(sessionId);
+          // Increment progress from 40 → 92 over MAX_POLLS iterations
+          const pct = 40 + Math.round((pollCount / MAX_POLLS) * 52);
+          setRunProgress(pct);
           if (statusRes.status === "completed") {
+            setRunProgress(100);
+            setRunStatus("Done!");
             if (statusRes.result) {
               onExecuted(statusRes.result);
             }
@@ -159,7 +192,14 @@ export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPi
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "Execution failed");
     } finally {
-      setRunning(false);
+      // brief pause so user sees 100% before hiding
+      setTimeout(() => {
+        setRunning(false);
+        setRunProgress(0);
+        setRunStatus("");
+        // Secondary refresh after 2s to catch any async Firestore writes
+        setTimeout(() => onRefreshBilling?.(), 2000);
+      }, 600);
     }
   };
 
@@ -195,38 +235,85 @@ export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPi
   return (
     <div className="flex h-full">
       <div className="flex-1 flex flex-col">
-        <div className="flex items-center gap-2 p-3 border-b section-divider glass-panel">
-          <input
-            value={planName}
-            onChange={(e) => setPlanName(e.target.value)}
-            className="font-display text-sm tracking-wide text-slate-200 bg-transparent border-none outline-none flex-1 uppercase"
-          />
-          <Button variant="secondary" size="sm" onClick={handleAddStep} disabled={!sessionId}>
-            + Add Step
-          </Button>
-          <Button variant="secondary" size="sm" onClick={handleSave} disabled={!sessionId || saving}>
-            {saving ? "Saving..." : "Save"}
-          </Button>
-          {onOpenWebhooks && (
-            <Button
-              id="toolbar-save-webhook-btn"
-              variant="secondary"
-              size="sm"
-              onClick={onOpenWebhooks}
-              disabled={!sessionId}
-              title="Save & configure persistent webhook trigger for this pipeline"
-            >
-              ⚡ Save Webhook
+        <div className="flex flex-col border-b section-divider glass-panel">
+          {/* Toolbar row */}
+          <div className="flex items-center gap-2 p-3">
+            <input
+              value={planName}
+              onChange={(e) => setPlanName(e.target.value)}
+              className="font-display text-sm tracking-wide text-slate-200 bg-transparent border-none outline-none flex-1 uppercase"
+            />
+            <Button variant="secondary" size="sm" onClick={handleAddStep} disabled={!sessionId}>
+              + Add Step
             </Button>
+            <Button variant="secondary" size="sm" onClick={handleSave} disabled={!sessionId || saving}>
+              {saving ? (
+                <span className="flex items-center gap-1.5">
+                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+                  </svg>
+                  Saving
+                </span>
+              ) : "Save"}
+            </Button>
+            {onOpenWebhooks && (
+              <Button
+                id="toolbar-save-webhook-btn"
+                variant="secondary"
+                size="sm"
+                onClick={onOpenWebhooks}
+                disabled={!sessionId}
+                title="Save & configure persistent webhook trigger for this pipeline"
+              >
+                ⚡ Save Webhook
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleRun}
+              disabled={!sessionId || running || loadingPipeline || nodes.length === 0}
+            >
+              {running ? (
+                <span className="flex items-center gap-1.5">
+                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+                  </svg>
+                  {runProgress < 100 ? `${runProgress}%` : "Done!"}
+                </span>
+              ) : "▶ Run Pipeline"}
+            </Button>
+          </div>
+
+          {/* Pipeline load progress bar */}
+          {loadingPipeline && !running && !saving && (
+            <div className="px-3 pb-2">
+              <ProgressBar
+                variant="indeterminate"
+                height="h-1"
+                label="Loading pipeline…"
+              />
+            </div>
           )}
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={handleRun}
-            disabled={!sessionId || running || nodes.length === 0}
-          >
-            {running ? "Running..." : "Run Pipeline"}
-          </Button>
+
+          {/* Run progress bar */}
+          {running && (
+            <div className="px-3 pb-2">
+              <ProgressBar
+                variant="determinate"
+                value={runProgress}
+                height="h-1"
+                label={runStatus}
+              />
+            </div>
+          )}
+
+          {/* Save progress bar */}
+          {saving && !running && (
+            <ProgressBar variant="indeterminate" height="h-0.5" />
+          )}
         </div>
 
         <div className="flex-1 bg-slate-950/30">

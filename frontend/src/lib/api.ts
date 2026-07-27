@@ -1,8 +1,9 @@
 import axios from "axios";
 import { auth } from "./firebase";
-import type { DatasetProfile, ExecutionResult, PipelinePlan } from "../types";
+import type { DatasetProfile, ExecutionResult, PipelinePlan, LimitExceededError } from "../types";
 
-const api = axios.create({ baseURL: "/api" });
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const api = axios.create({ baseURL: `${API_BASE_URL}/api` });
 
 // Attach Firebase ID token to every request
 api.interceptors.request.use(async (config) => {
@@ -14,10 +15,33 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+// 402 Payment Required global interceptor
+type OnLimitExceededCallback = (error: LimitExceededError) => void;
+let limitExceededHandler: OnLimitExceededCallback | null = null;
+
+export function setLimitExceededHandler(handler: OnLimitExceededCallback | null) {
+  limitExceededHandler = handler;
+}
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 402 && error.response?.data?.detail) {
+      const detail = error.response.data.detail;
+      if (typeof detail === "object" && detail.error === "limit_exceeded" && limitExceededHandler) {
+        limitExceededHandler(detail);
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+
 export interface UploadOptions {
   headerRow?: number;
   sheetIndex?: number;
 }
+
 
 /**
  * Upload a file directly to the backend as multipart/form-data.
@@ -102,7 +126,7 @@ export function streamChat(
     try {
       const user = auth.currentUser;
       const token = user ? await user.getIdToken() : null;
-      const res = await fetch(`/api/chat/${sessionId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/chat/${sessionId}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -177,3 +201,39 @@ export async function rotatePipelineSecret(pipelineId: string) {
   return data;
 }
 
+// ── Billing ──────────────────────────────────────────────────────────────────
+import type { BillingSubscription, CheckoutResponse, PortalResponse } from "../types";
+
+export async function getBillingStatus(sessionId?: string): Promise<BillingSubscription> {
+  const url = sessionId ? `/billing/me?session_id=${encodeURIComponent(sessionId)}` : "/billing/me";
+  const { data } = await api.get<BillingSubscription>(url);
+  return data;
+}
+
+export async function createCheckoutSession(tier: "analyst" | "studio"): Promise<CheckoutResponse> {
+  const { data } = await api.post<CheckoutResponse>("/billing/checkout", { tier });
+  return data;
+}
+
+export async function openBillingPortal(): Promise<PortalResponse> {
+  const { data } = await api.post<PortalResponse>("/billing/portal");
+  return data;
+}
+
+// ── Session History ───────────────────────────────────────────────────────────
+import type { SessionSummary } from "../types";
+
+/** List the authenticated user's active (non-expired) sessions, newest first. */
+export async function listSessions(): Promise<SessionSummary[]> {
+  const { data } = await api.get<SessionSummary[]>("/sessions");
+  return data;
+}
+
+/**
+ * Fetch just the DatasetProfile for an existing session (no re-upload needed).
+ * The backend retrieves the parquet from Supabase Storage on demand.
+ */
+export async function getSessionProfile(sessionId: string): Promise<import("../types").DatasetProfile> {
+  const { data } = await api.get<import("../types").DatasetProfile>(`/session/${sessionId}/profile`);
+  return data;
+}

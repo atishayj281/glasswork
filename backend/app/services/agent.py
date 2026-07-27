@@ -30,10 +30,11 @@ Return ONLY valid JSON. No markdown fences. No explanation text.
 
 {
   "name": "string",
+  "summary_template": "string (optional summary sentence using placeholders like {top_driver.column}, {top_driver.group_a_mean}, {top_driver.group_b_mean}, {top_driver.mean_diff}, {top_driver.pct_change})",
   "steps": [
     {
       "id": "string",
-      "type": "filter | select_columns | rename | fill_na | cast_type | groupby_agg | sort | deduplicate | compute_column | visualize",
+      "type": "filter | select_columns | rename | fill_na | cast_type | groupby_agg | sort | deduplicate | compute_column | visualize | compare_groups | correlation",
       "label": "string",
       "params": { <type-specific fields> },
       "position": { "x": number, "y": number }
@@ -75,7 +76,8 @@ sort:
 
 visualize:
   { "chart_type": "bar", "x": "region", "y": "revenue", "title": "Revenue by Region" }
-  chart types: bar, line, scatter, pie, histogram, heatmap
+  chart types: bar, line, scatter, pie, histogram, heatmap, box
+  Use "box" to show distribution and spread when comparing groups (not just means).
 
 select_columns: { "columns": ["region", "revenue"] }
 rename: { "mapping": { "old_name": "new_name" } }
@@ -84,6 +86,24 @@ cast_type: { "column": "date", "dtype": "datetime" }
 deduplicate: { "subset": ["region", "date"] }
 compute_column: { "name": "tax", "expression": "revenue * 0.1" }
 IMPORTANT FOR compute_column: The expression MUST be a pure arithmetic or comparison expression using column names, numbers, and basic operators (+, -, *, /). Function calls, method calls, string methods, or date functions (e.g. month(), strftime(), dt.month) are STRICTLY FORBIDDEN and will cause backend pipeline execution to fail.
+
+compare_groups:
+  Use when comparing a numeric metric between exactly two groups (e.g. high vs low defect rate, treatment vs control).
+  Runs Welch's t-test (unequal variance) for each column. Applies Bonferroni correction automatically.
+  The group_by column MUST have exactly 2 unique non-null values in the dataset — if it has more, add a filter step first.
+  { "group_by": "machine_type", "columns": ["defect_rate", "cycle_time"], "alpha": 0.05 }
+
+correlation:
+  Use when measuring the linear (pearson) or monotonic (spearman) relationship between two numeric columns.
+  { "x": "temperature", "y": "defect_rate", "method": "pearson" }
+  { "x": "age", "y": "salary", "method": "spearman" }
+
+REPORTING RULE: When your plan includes compare_groups or correlation steps, your chat explanation MUST explicitly
+mention the Bonferroni-corrected significance threshold (for compare_groups) and whether the result is significant
+at the corrected level — not just the raw p-value. Saying 'p=0.03' is misleading when testing 5 columns at alpha=0.05
+because the Bonferroni-corrected threshold is 0.01. Always clarify both.
+
+SUMMARY TEMPLATE INSTRUCTION: When your plan includes compare_groups, include a top-level "summary_template" field in your JSON plan using domain-tailored language with variables like {top_driver.column}, {top_driver.group_a_mean}, {top_driver.group_b_mean}, {top_driver.mean_diff}, {top_driver.pct_change}. Example: "{top_driver.column} is the primary root cause. Defective batches average {top_driver.group_b_mean} vs {top_driver.group_a_mean} in normal runs ({top_driver.pct_change})."
 
 EXAMPLE:
 {
@@ -180,6 +200,9 @@ def _build_generation_messages(
     return messages
 
 
+from app.services.circuit_breaker import litellm_circuit_breaker
+
+
 async def _call_llm(
     messages: list[dict[str, str]],
     use_structured: bool,
@@ -190,8 +213,12 @@ async def _call_llm(
     }
     if use_structured:
         kwargs["response_format"] = TypedPipelinePlan
-    response = await litellm.acompletion(**kwargs)
-    return response.choices[0].message.content
+
+    async def _raw_call():
+        response = await litellm.acompletion(**kwargs)
+        return response.choices[0].message.content
+
+    return await litellm_circuit_breaker.call_async(_raw_call)
 
 
 async def chat_stream(
@@ -220,11 +247,14 @@ async def chat_stream(
         json.dumps(messages, indent=2),
     )
 
-    response = await litellm.acompletion(
-        model=LITELLM_MODEL,
-        messages=messages,
-        stream=True,
-    )
+    async def _raw_stream():
+        return await litellm.acompletion(
+            model=LITELLM_MODEL,
+            messages=messages,
+            stream=True,
+        )
+
+    response = await litellm_circuit_breaker.call_async(_raw_stream)
 
     full_response = ""
     async for chunk in response:

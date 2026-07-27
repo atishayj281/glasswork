@@ -93,15 +93,27 @@ def record_llm_call(uid: str, tokens_used: int = 0) -> None:
         logger.error("Budget record failed for uid=%s: %s", uid, e)
 
 
-def check_budget(uid: str, max_calls: int, max_tokens: int) -> None:
+def check_budget(uid: str, max_calls: int | None = None, max_tokens: int | None = None) -> None:
     """
     Raise ValueError with a descriptive message if the uid has exceeded
     either the daily call or token budget.
+    Resolves limits from the user's tier if max_calls or max_tokens are None.
     Silently no-ops (allows the request) if Redis is unavailable.
     """
     r = _get_redis()
     if r is None:
         return
+
+    if max_calls is None or max_tokens is None:
+        from app.billing.tiers import get_tier_config
+        from app.services.user_store import user_store
+        sub = user_store.get_subscription(uid)
+        tier_cfg = get_tier_config(sub.tier)
+        if max_calls is None:
+            max_calls = tier_cfg.max_daily_llm_calls
+        if max_tokens is None:
+            max_tokens = tier_cfg.max_daily_tokens
+
     day = _day_key_suffix()
     calls_key = f"budget:calls:{uid}:{day}"
     tokens_key = f"budget:tokens:{uid}:{day}"
@@ -127,6 +139,7 @@ def check_budget(uid: str, max_calls: int, max_tokens: int) -> None:
             f"Daily token limit reached ({tokens}/{max_tokens}). "
             f"Your budget resets at midnight UTC."
         )
+
 
 
 def get_usage(uid: str) -> dict:

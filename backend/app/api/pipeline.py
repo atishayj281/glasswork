@@ -48,11 +48,16 @@ async def update_pipeline(
     return plan
 
 
+from app.middleware.gating import require_tier_limit
+from app.services.user_store import user_store
+
+
 @router.post("/pipeline/{session_id}/generate")
 async def generate(
     session_id: str,
     body: GenerateRequest | None = None,
     uid: str | None = Depends(get_current_user_optional),
+    tier_cfg = Depends(require_tier_limit("pipeline_generations")),
 ) -> PipelinePlan:
     logger.info("[POST /generate] session=%s intent=%r", session_id, body.intent if body else None)
     session = require_session_access(session_id, uid)
@@ -64,7 +69,7 @@ async def generate(
     # Enforce per-uid daily LLM budget (only for authenticated users)
     if uid:
         try:
-            check_budget(uid, BUDGET_MAX_CALLS_PER_DAY, BUDGET_MAX_TOKENS_PER_DAY)
+            check_budget(uid)
         except ValueError as e:
             raise HTTPException(status_code=429, detail=str(e))
 
@@ -72,7 +77,8 @@ async def generate(
     try:
         plan = await generate_pipeline(session, intent)
         logger.info("[POST /generate] session=%s generated pipeline=%r steps=%d", session_id, plan.name, len(plan.steps))
-        # Record one LLM call; token count estimated from pipeline JSON size
+        # Record usage
+        user_store.record_usage(uid or "anonymous", "pipeline_generations")
         if uid:
             token_estimate = len(plan.model_dump_json()) // 4
             record_llm_call(uid, tokens_used=token_estimate)
@@ -117,17 +123,23 @@ def run_pipeline_bg(session_id: str):
         session_store.save(session)
 
 
+from app.services.queue import enqueue_task
+
+
 @router.post("/pipeline/{session_id}/execute")
 async def execute(
     session_id: str,
     background_tasks: BackgroundTasks,
     uid: str | None = Depends(get_current_user_optional),
+    tier_cfg = Depends(require_tier_limit("pipeline_runs")),
 ):
-    logger.info("[POST /execute] session=%s triggering background execution", session_id)
+    logger.info("[POST /execute] session=%s triggering execution", session_id)
     session = require_session_access(session_id, uid)
     if not session.pipeline:
         logger.warning("[POST /execute] session=%s has no pipeline", session_id)
         raise HTTPException(400, "No pipeline defined. Generate or create one first.")
+
+    user_store.record_usage(uid or "anonymous", "pipeline_runs")
 
     session.execution_status = "processing"
     session.execution_error = None
@@ -135,8 +147,16 @@ async def execute(
     session_store.save(session)
     logger.info("[POST /execute] session=%s status set to processing", session_id)
 
+    # Attempt to offload task to Redis Message Queue for dedicated background worker processes
+    task_id = enqueue_task("pipeline_execution", {"session_id": session_id})
+    if task_id:
+        logger.info("[POST /execute] session=%s enqueued task_id=%s", session_id, task_id)
+        return {"status": "processing", "task_id": task_id, "mode": "queued"}
+
+    # Fallback to local background task execution when Redis queue is unconfigured
+    logger.info("[POST /execute] Redis queue unavailable — running via local FastAPI BackgroundTasks", session_id)
     background_tasks.add_task(run_pipeline_bg, session_id)
-    return {"status": "processing"}
+    return {"status": "processing", "mode": "local_bg"}
 
 
 @router.get("/pipeline/{session_id}/status")

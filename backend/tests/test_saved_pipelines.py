@@ -2,10 +2,13 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 import pytest
 
+from app.billing.tiers import TierName
 from app.main import app
 from app.models.pipeline import PipelinePlan, PipelineStep
+from app.models.user import UserSubscription
 from app.services.saved_pipeline_store import saved_pipeline_store
 from app.services.session import session_store
+from app.services.user_store import user_store
 from tests.test_auth import _firebase_decode, _make_session, _valid_bearer
 
 
@@ -14,6 +17,10 @@ def test_promote_list_rotate_delete_saved_pipeline_flow():
 
     user1_uid = "user-1-uid"
     user2_uid = "user-2-uid"
+
+    # Pre-seed Analyst tier so saved-pipeline gate passes for both users
+    user_store.save_subscription(UserSubscription(uid=user1_uid, tier=TierName.ANALYST))
+    user_store.save_subscription(UserSubscription(uid=user2_uid, tier=TierName.ANALYST))
 
     # Create session for user1 with a pipeline
     session1 = _make_session(uid=user1_uid)
@@ -127,6 +134,9 @@ def test_promote_list_rotate_delete_saved_pipeline_flow():
 def test_promote_pipeline_no_pipeline_in_session():
     client = TestClient(app, raise_server_exceptions=False)
     uid = "user-empty-sess"
+
+    # Pre-seed Analyst tier so saved-pipeline gate passes and we reach the 400 check
+    user_store.save_subscription(UserSubscription(uid=uid, tier=TierName.ANALYST))
 
     session = _make_session(uid=uid)
     session.session_id = "session-empty"

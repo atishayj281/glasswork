@@ -5,19 +5,26 @@ import {
   promotePipeline,
   deleteSavedPipeline,
   rotatePipelineSecret,
+  API_BASE_URL,
 } from "../lib/api";
+
 import Button from "./ui/Button";
+import ProgressBar from "./ui/ProgressBar";
 
 interface Props {
   sessionId: string | null;
   currentPipelineName?: string;
+  tier?: string;
   onClose: () => void;
+  onNavigatePricing?: () => void;
 }
 
 export default function SavedPipelinesModal({
   sessionId,
   currentPipelineName = "Saved Pipeline",
+  tier = "explorer",
   onClose,
+  onNavigatePricing,
 }: Props) {
   const [pipelines, setPipelines] = useState<SavedPipelineItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,15 +121,18 @@ export default function SavedPipelinesModal({
   };
 
   const getWebhookUrl = (pipelineId: string) => {
-    const origin = window.location.origin;
+    const origin = API_BASE_URL || window.location.origin;
     return `${origin}/api/webhooks/${pipelineId}/trigger`;
   };
+
 
   const getCurlSnippet = (pipelineId: string, secret?: string) => {
     const url = getWebhookUrl(pipelineId);
     const sec = secret || "<YOUR_WEBHOOK_SECRET>";
     return `curl -X POST "${url}" \\\n  -H "X-Webhook-Secret: ${sec}" \\\n  -F "file=@data.csv"`;
   };
+
+  const isExplorer = (tier ?? "explorer").toLowerCase() === "explorer";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
@@ -148,6 +158,50 @@ export default function SavedPipelinesModal({
           </button>
         </div>
 
+        {/* Explorer upgrade wall */}
+        {isExplorer && (
+          <div className="flex-1 flex flex-col items-center justify-center px-8 py-12 text-center gap-5">
+            <div className="w-14 h-14 rounded-2xl bg-neon-cyan/10 border border-neon-cyan/30 flex items-center justify-center text-3xl">
+              ⚡
+            </div>
+            <div>
+              <h3 className="text-lg font-bold font-display text-white">Webhook Pipelines require Analyst+</h3>
+              <p className="text-sm text-slate-400 font-mono mt-2 max-w-sm">
+                Save any pipeline as a persistent webhook endpoint triggerable from n8n, cron jobs, or curl — available on the Analyst and Studio plans.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <Button
+                variant="primary"
+                onClick={() => { onClose(); onNavigatePricing?.(); }}
+                id="webhooks-upgrade-btn"
+              >
+                View Pricing & Upgrade
+              </Button>
+              <Button variant="secondary" onClick={onClose}>
+                Maybe Later
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 w-full max-w-xs text-left mt-2">
+              {[
+                "Save pipelines as persistent APIs",
+                "Trigger via HTTP with secret key",
+                "Integrate with n8n, Zapier, cron",
+                "Up to unlimited webhooks (Studio)",
+              ].map((feat) => (
+                <div key={feat} className="flex items-start gap-2 text-xs font-mono text-slate-400">
+                  <span className="text-neon-cyan mt-0.5">✓</span>
+                  <span>{feat}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Full modal content for Analyst / Studio */}
+        {!isExplorer && (
+          <>
+
         {/* Promote / Save current session pipeline */}
         {sessionId && !generatedSecret && (
           <div className="px-6 py-4 border-b border-slate-700/40 bg-slate-900/40 shrink-0">
@@ -169,7 +223,15 @@ export default function SavedPipelinesModal({
                 onClick={handlePromote}
                 disabled={saving}
               >
-                {saving ? "Saving…" : "Save as Webhook"}
+                {saving ? (
+                  <span className="flex items-center gap-1.5">
+                    <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+                    </svg>
+                    Saving…
+                  </span>
+                ) : "Save as Webhook"}
               </Button>
             </div>
           </div>
@@ -246,9 +308,11 @@ export default function SavedPipelinesModal({
         {/* Saved Pipelines List */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 min-h-0">
           {loading && (
-            <p className="text-slate-500 text-sm font-mono text-center py-8">
-              Loading saved pipelines…
-            </p>
+            <div className="flex flex-col items-center gap-3 py-10">
+              <div className="w-8 h-8 border-2 border-neon-cyan/30 border-t-neon-cyan rounded-full animate-spin" />
+              <ProgressBar variant="indeterminate" className="max-w-xs" />
+              <p className="text-xs text-slate-500 font-mono">Loading saved pipelines…</p>
+            </div>
           )}
 
           {!loading && pipelines.length === 0 && (
@@ -384,6 +448,8 @@ export default function SavedPipelinesModal({
             );
           })}
         </div>
+        </>
+        )}
       </div>
     </div>
   );

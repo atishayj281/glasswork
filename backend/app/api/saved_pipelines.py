@@ -38,6 +38,9 @@ class RotateSecretResponse(BaseModel):
     webhook_secret: str
 
 
+from app.middleware.gating import require_tier_limit
+
+
 @router.post(
     "/pipelines/saved",
     response_model=SavedPipelineCreateResponse,
@@ -46,6 +49,7 @@ class RotateSecretResponse(BaseModel):
 async def promote_pipeline(
     req: PromotePipelineRequest,
     user_uid: str = Depends(get_current_user),
+    tier_cfg = Depends(require_tier_limit("saved_pipelines")),
 ) -> SavedPipelineCreateResponse:
     """Promote a session's pipeline to a persistent SavedPipeline."""
     session = require_session_access(req.session_id, user_uid)
