@@ -1,0 +1,43 @@
+services:
+  # 1. Aegis Backend FastAPI Web Service
+  - type: web
+    name: aegis-backend-api
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 4
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: REDIS_URL
+        sync: false # Upstash or Render Redis URL (e.g. rediss://default:...)
+      - key: SENTRY_DSN
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+
+  # 2. Aegis Background Task Worker Service
+  - type: worker
+    name: aegis-backend-worker
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.worker
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: REDIS_URL
+        sync: false # Must match REDIS_URL from Web Service
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false

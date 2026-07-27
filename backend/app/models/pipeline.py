@@ -13,11 +13,13 @@ StepType = Literal[
     "deduplicate",
     "compute_column",
     "visualize",
+    "compare_groups",
+    "correlation",
 ]
 
 FilterOp = Literal["eq", "neq", "gt", "gte", "lt", "lte", "contains", "is_null", "not_null", "between"]
 AggFunc = Literal["sum", "count", "mean", "min", "max"]
-ChartType = Literal["bar", "line", "scatter", "pie", "histogram", "heatmap"]
+ChartType = Literal["bar", "line", "scatter", "pie", "histogram", "heatmap", "box"]
 CastDtype = Literal["int", "float", "str", "datetime"]
 
 
@@ -75,6 +77,18 @@ class VisualizeParams(BaseModel):
     y: str | None = None
     title: str | None = None
     color: str | None = None
+
+
+class CompareGroupsParams(BaseModel):
+    group_by: str
+    columns: list[str]
+    alpha: float = 0.05
+
+
+class CorrelationParams(BaseModel):
+    x: str
+    y: str
+    method: Literal["pearson", "spearman"] = "pearson"
 
 
 class FilterStep(BaseModel):
@@ -157,6 +171,22 @@ class VisualizeStep(BaseModel):
     position: NodePosition = Field(default_factory=NodePosition)
 
 
+class CompareGroupsStep(BaseModel):
+    id: str
+    type: Literal["compare_groups"]
+    label: str
+    params: CompareGroupsParams
+    position: NodePosition = Field(default_factory=NodePosition)
+
+
+class CorrelationStep(BaseModel):
+    id: str
+    type: Literal["correlation"]
+    label: str
+    params: CorrelationParams
+    position: NodePosition = Field(default_factory=NodePosition)
+
+
 TypedPipelineStep = Union[
     FilterStep,
     SelectColumnsStep,
@@ -168,6 +198,8 @@ TypedPipelineStep = Union[
     DeduplicateStep,
     ComputeColumnStep,
     VisualizeStep,
+    CompareGroupsStep,
+    CorrelationStep,
 ]
 
 PARAM_MODELS: dict[str, type[BaseModel]] = {
@@ -181,6 +213,8 @@ PARAM_MODELS: dict[str, type[BaseModel]] = {
     "deduplicate": DeduplicateParams,
     "compute_column": ComputeColumnParams,
     "visualize": VisualizeParams,
+    "compare_groups": CompareGroupsParams,
+    "correlation": CorrelationParams,
 }
 
 
@@ -207,6 +241,7 @@ class PipelineEdge(BaseModel):
 
 class PipelinePlan(BaseModel):
     name: str = "Untitled Pipeline"
+    summary_template: str | None = None
     steps: list[PipelineStep] = Field(default_factory=list)
     edges: list[PipelineEdge] = Field(default_factory=list)
 
@@ -215,12 +250,14 @@ class TypedPipelinePlan(BaseModel):
     """Strict schema for LLM structured output (discriminated by step type)."""
 
     name: str = "Untitled Pipeline"
+    summary_template: str | None = None
     steps: list[TypedPipelineStep]
     edges: list[PipelineEdge] = Field(default_factory=list)
 
     def to_pipeline_plan(self) -> PipelinePlan:
         return PipelinePlan(
             name=self.name,
+            summary_template=self.summary_template,
             steps=[
                 PipelineStep(
                     id=step.id,

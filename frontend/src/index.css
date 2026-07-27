@@ -4,12 +4,19 @@
 
 @layer base {
   :root {
-    --color-bg: #0a0e17;
-    --color-surface: rgba(15, 23, 42, 0.6);
-    --color-border: rgba(34, 211, 238, 0.2);
-    --color-text: #e2e8f0;
-    --color-text-muted: #94a3b8;
-    --color-accent: #22d3ee;
+    --bg-void: #0B0E14;
+    --bg-surface: #12161F;
+    --accent-signal: #F5A623;
+    --accent-flow: #4DD9C4;
+    --text-primary: #E7E9EE;
+    --text-muted: #8B92A3;
+
+    --color-bg: #0B0E14;
+    --color-surface: #12161F;
+    --color-border: rgba(77, 217, 196, 0.2);
+    --color-text: #E7E9EE;
+    --color-text-muted: #8B92A3;
+    --color-accent: #F5A623;
   }
 
   body {
@@ -143,3 +150,76 @@
 .react-flow__attribution {
   display: none;
 }
+
+/* ─── Progress bar animations ──────────────────────────────────────────────── */
+
+/* Indeterminate bar — left-to-right sweep */
+.progress-indeterminate {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(34, 211, 238, 0.8) 40%,
+    rgba(167, 139, 250, 0.8) 60%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: progress-sweep 1.4s ease-in-out infinite;
+}
+
+/* Pulse variant — slow breathe for very long ops */
+.progress-pulse {
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.4) 0%, rgba(59, 130, 246, 0.6) 50%, rgba(167, 139, 250, 0.4) 100%);
+  background-size: 200% 100%;
+  animation: progress-breathe 2.8s ease-in-out infinite;
+}
+
+@keyframes progress-sweep {
+  0%   { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes progress-breathe {
+  0%, 100% { opacity: 0.5; background-position: 0% 0; }
+  50%       { opacity: 1;   background-position: 100% 0; }
+}
+
+/* Global top-of-page slim bar */
+.top-progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 9999;
+  background: linear-gradient(90deg, #22d3ee, #3b82f6, #a78bfa);
+  background-size: 200% 100%;
+  animation: progress-sweep 1.2s linear infinite;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.6);
+}
+
+/* ─── Typing dots animation (AgentChat) ─────────────────────────────────────*/
+@keyframes typing-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30%           { transform: translateY(-4px); opacity: 1; }
+}
+
+.animate-typing-dot {
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+
+/* ─── Slide-in drawer (SessionHistoryPanel) ─────────────────────────────────*/
+@keyframes slide-in-from-left {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+
+.animate-in.slide-in-from-left {
+  animation: slide-in-from-left 0.2s ease-out forwards;
+}
+
+/* ─── Shimmer animation (FileUpload) ────────────────────────────────────────*/
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+

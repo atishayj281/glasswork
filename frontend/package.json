@@ -1,5 +1,5 @@
 {
-  "name": "aegis-frontend",
+  "name": "glasswork-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -14,10 +14,14 @@
     "@xyflow/react": "^12.3.6",
     "axios": "^1.7.9",
     "firebase": "^12.16.0",
+    "framer-motion": "^12.42.2",
+    "lucide-react": "^1.26.0",
     "plotly.js": "^2.35.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-plotly.js": "^2.6.0"
+    "react-markdown": "^10.1.0",
+    "react-plotly.js": "^2.6.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/plotly.js": "^2.33.4",

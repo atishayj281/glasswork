@@ -221,37 +221,38 @@ def test_cors_origins_default_to_production_safe(monkeypatch):
     import importlib
     import dotenv
 
-    # Remove all app modules from sys.modules to force full reload (including config)
-    for mod in list(sys.modules.keys()):
-        if mod.startswith("app"):
-            del sys.modules[mod]
+    saved_modules = dict(sys.modules)
+    try:
+        # Remove all app modules from sys.modules to force full reload (including config)
+        for mod in list(sys.modules.keys()):
+            if mod.startswith("app"):
+                del sys.modules[mod]
 
-    # Prevent load_dotenv from loading the local dev .env file
-    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **kw: None)
+        # Prevent load_dotenv from loading the local dev .env file
+        monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **kw: None)
 
-    # Set CORS_ORIGIN to a production URL and unset ENVIRONMENT
-    monkeypatch.setenv("CORS_ORIGIN", "https://aegis.example.com")
-    monkeypatch.delenv("ENVIRONMENT", raising=False)
+        # Set CORS_ORIGIN to a production URL and unset ENVIRONMENT
+        monkeypatch.setenv("CORS_ORIGIN", "https://aegis.example.com")
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
 
-    # Import a FRESH copy of app.main under a local alias. Do NOT reassign the
-    # module-level `app` name imported at the top of this file — other tests
-    # in this module (and pytest's collection order) rely on it continuing to
-    # point at the original, unmutated FastAPI instance.
-    fresh_main = importlib.import_module("app.main")
+        fresh_main = importlib.import_module("app.main")
 
-    # Inspect middleware on the freshly-reloaded FastAPI instance
-    cors_mw = None
-    for mw in fresh_main.app.user_middleware:
-        if "CORSMiddleware" in str(mw.cls):
-            cors_mw = mw
-            break
+        # Inspect middleware on the freshly-reloaded FastAPI instance
+        cors_mw = None
+        for mw in fresh_main.app.user_middleware:
+            if "CORSMiddleware" in str(mw.cls):
+                cors_mw = mw
+                break
 
-    assert cors_mw is not None, "CORSMiddleware not found in app user_middleware"
-    allow_origins = cors_mw.kwargs.get("allow_origins", [])
+        assert cors_mw is not None, "CORSMiddleware not found in app user_middleware"
+        allow_origins = cors_mw.kwargs.get("allow_origins", [])
 
-    # Localhost origins must NOT be present
-    assert "http://localhost:5173" not in allow_origins
-    assert "http://127.0.0.1:5173" not in allow_origins
+        # Localhost origins must NOT be present
+        assert "http://localhost:5173" not in allow_origins
+        assert "http://127.0.0.1:5173" not in allow_origins
+    finally:
+        sys.modules.clear()
+        sys.modules.update(saved_modules)
 
 
 def test_health_endpoint_degraded_and_cache():

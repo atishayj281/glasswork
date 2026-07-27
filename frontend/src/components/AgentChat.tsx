@@ -1,10 +1,126 @@
 import { useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Components } from "react-markdown";
 import type { ChatMessage, DatasetProfile } from "../types";
 import { generatePipeline, streamChat } from "../lib/api";
 import Panel from "./ui/Panel";
 import Badge from "./ui/Badge";
 import Button from "./ui/Button";
 import { Input } from "./ui/Input";
+
+/** Custom component map for react-markdown — applies design-system styles */
+const markdownComponents: Components = {
+  // Paragraphs
+  p: ({ children }) => (
+    <p className="mb-2 last:mb-0 leading-relaxed text-slate-200">{children}</p>
+  ),
+  // Headings
+  h1: ({ children }) => (
+    <h1 className="text-base font-bold text-neon-cyan mb-2 mt-3 first:mt-0">{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="text-sm font-bold text-neon-cyan mb-1 mt-3 first:mt-0">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-sm font-semibold text-slate-100 mb-1 mt-2 first:mt-0">{children}</h3>
+  ),
+  // Unordered list
+  ul: ({ children }) => (
+    <ul className="list-disc list-outside pl-4 mb-2 space-y-0.5 text-slate-200">{children}</ul>
+  ),
+  // Ordered list
+  ol: ({ children }) => (
+    <ol className="list-decimal list-outside pl-4 mb-2 space-y-0.5 text-slate-200">{children}</ol>
+  ),
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  // Inline code
+  code: ({ className, children, ...props }) => {
+    const isBlock = Boolean(className);
+    if (isBlock) {
+      return (
+        <code
+          className="block bg-slate-900/80 border border-slate-700/60 rounded-md px-3 py-2 my-2 font-mono text-xs text-emerald-300 overflow-x-auto whitespace-pre"
+          {...props}
+        >
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code
+        className="bg-slate-800/70 border border-slate-700/50 rounded px-1 py-0.5 font-mono text-xs text-emerald-300"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+  // Fenced code block wrapper
+  pre: ({ children }) => (
+    <pre className="my-2 rounded-md overflow-x-auto bg-slate-900/80 border border-slate-700/60">
+      {children}
+    </pre>
+  ),
+  // Blockquote
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-neon-cyan/50 pl-3 my-2 text-slate-400 italic">
+      {children}
+    </blockquote>
+  ),
+  // Table
+  table: ({ children }) => (
+    <div className="overflow-x-auto my-2">
+      <table className="w-full text-xs border-collapse border border-slate-700/60 rounded-md">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }) => (
+    <thead className="bg-slate-800/60 text-neon-cyan">{children}</thead>
+  ),
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  tr: ({ children }) => (
+    <tr className="border-b border-slate-700/40 even:bg-slate-800/20">{children}</tr>
+  ),
+  th: ({ children }) => (
+    <th className="px-2 py-1.5 text-left font-semibold border-r border-slate-700/40 last:border-r-0">
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="px-2 py-1 text-slate-300 border-r border-slate-700/30 last:border-r-0">
+      {children}
+    </td>
+  ),
+  // Horizontal rule
+  hr: () => <hr className="border-slate-700/50 my-3" />,
+  // Bold / italic
+  strong: ({ children }) => (
+    <strong className="font-semibold text-slate-100">{children}</strong>
+  ),
+  em: ({ children }) => <em className="italic text-slate-300">{children}</em>,
+  // Links
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-neon-cyan underline underline-offset-2 hover:text-cyan-300 transition-colors"
+    >
+      {children}
+    </a>
+  ),
+};
+
+/** Render assistant response content as formatted Markdown */
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      {content}
+    </ReactMarkdown>
+  );
+}
 
 interface Props {
   sessionId: string | null;
@@ -151,7 +267,15 @@ export default function AgentChat({ sessionId, profile, onPipelineGenerated }: P
                 : "glass-card mr-6 border-l-2 border-l-neon-cyan/50"
             }`}
           >
-            {msg.content || (streaming && i === messages.length - 1 ? <TypingDots /> : "")}
+            {msg.role === "assistant" ? (
+            msg.content ? (
+              <MarkdownContent content={msg.content} />
+            ) : streaming && i === messages.length - 1 ? (
+              <TypingDots />
+            ) : null
+          ) : (
+            msg.content
+          )}
           </div>
         ))}
         <div ref={bottomRef} />

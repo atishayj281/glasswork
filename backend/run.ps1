@@ -11,4 +11,4 @@ if (-not (Test-Path $Python)) {
 }
 
 Set-Location $Root
-& $Python -m uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port 8000
+& $Python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000

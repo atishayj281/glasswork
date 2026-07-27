@@ -30,7 +30,9 @@ export type StepType =
   | "sort"
   | "deduplicate"
   | "compute_column"
-  | "visualize";
+  | "visualize"
+  | "compare_groups"
+  | "correlation";
 
 export interface NodePosition {
   x: number;
@@ -52,6 +54,7 @@ export interface PipelineEdge {
 
 export interface PipelinePlan {
   name: string;
+  summary_template?: string | null;
   steps: PipelineStep[];
   edges: PipelineEdge[];
 }
@@ -117,3 +120,65 @@ export interface RotateSecretResponse {
   rotated_at: string;
 }
 
+export type TierName = "explorer" | "analyst" | "studio";
+
+export interface TierLimits {
+  max_uploads_per_month: number | null;
+  max_file_size_mb: number;
+  max_pipeline_runs_per_month: number | null;
+  max_pipeline_generations_per_month: number | null;
+  max_daily_tokens: number;
+  max_daily_llm_calls: number;
+  session_retention_days: number;
+  allowed_llm_providers: string[];
+  max_saved_pipelines: number | null;
+  max_seats: number;
+  export_formats: string[];
+  priority_queue: boolean;
+}
+
+export interface TierUsage {
+  uploads: number;
+  pipeline_runs: number;
+  pipeline_generations: number;
+  daily_tokens: number;
+  daily_llm_calls: number;
+}
+
+export interface BillingSubscription {
+  uid: string;
+  tier: TierName;
+  tier_label: string;
+  stripe_status: string | null;
+  current_period_end: string | null;
+  limits: TierLimits;
+  usage_this_period: TierUsage;
+}
+
+export interface CheckoutResponse {
+  checkout_url: string;
+  session_id: string;
+}
+
+export interface PortalResponse {
+  portal_url: string;
+}
+
+/** Structured 402 error detail from the backend gating middleware */
+export interface LimitExceededError {
+  error: "limit_exceeded";
+  tier: TierName;
+  limit: string;
+  message: string;
+  upgrade_url: string;
+}
+
+/** Lightweight summary returned by GET /api/sessions */
+export interface SessionSummary {
+  session_id: string;
+  file_name: string;
+  pipeline_name: string | null;
+  created_at: string; // ISO-8601
+  chat_message_count: number;
+  has_result: boolean;
+}

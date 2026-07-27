@@ -41,6 +41,8 @@ def build_chart(df: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
         else:
             fig = go.Figure()
             fig.update_layout(title="Not enough numeric columns for heatmap")
+    elif chart_type == "box" and x and y:
+        fig = px.box(df, x=x, y=y, color=color, title=title)
     else:
         if x and y:
             fig = px.bar(df, x=x, y=y, title=title)

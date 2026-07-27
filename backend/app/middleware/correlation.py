@@ -1,4 +1,4 @@
-from app.logging_config import session_context
+from app import logging_config
 
 
 class CorrelationIdMiddleware:
@@ -27,9 +27,9 @@ class CorrelationIdMiddleware:
                         session_id = potential_id
                         break
 
-        token = session_context.set(session_id) if session_id else None
+        token = logging_config.session_context.set(session_id) if session_id else None
         try:
             await self.app(scope, receive, send)
         finally:
             if token:
-                session_context.reset(token)
+                logging_config.session_context.reset(token)

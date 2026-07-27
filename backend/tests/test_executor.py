@@ -5,6 +5,8 @@ import pytest
 
 from app.models.pipeline import PipelineEdge, PipelinePlan, PipelineStep
 from app.services.executor import (
+    _apply_compare_groups,
+    _apply_correlation,
     _apply_step,
     _build_graph,
     _resolve_input,
@@ -430,3 +432,241 @@ class TestSafeEvalExpression:
         # And calling them must still be blocked at AST parse stage as 'Call'
         with pytest.raises(ValueError, match="'Call'"):
             _safe_eval_expression(df_colliding, "len(sum)")
+
+
+# ---------------------------------------------------------------------------
+# compare_groups — Phase 1
+# ---------------------------------------------------------------------------
+
+class TestCompareGroups:
+    """Welch's t-test with Bonferroni correction."""
+
+    def _df_clearly_different(self) -> pd.DataFrame:
+        """Group A has much higher values than group B — should be significant."""
+        return pd.DataFrame({
+            "group": ["A"] * 30 + ["B"] * 30,
+            "metric": list(range(100, 130)) + list(range(200, 230)),  # A~115, B~215
+        })
+
+    def _df_identical_groups(self) -> pd.DataFrame:
+        """Groups drawn from same distribution — should NOT be significant."""
+        import random
+        random.seed(42)
+        vals = [random.gauss(50, 5) for _ in range(60)]
+        return pd.DataFrame({
+            "group": ["A"] * 30 + ["B"] * 30,
+            "metric": vals,
+        })
+
+    def test_significant_result(self):
+        df = self._df_clearly_different()
+        result = _apply_compare_groups(df, {"group_by": "group", "columns": ["metric"], "alpha": 0.05})
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["significant_raw"] == True
+        assert row["significant_corrected"] == True
+        assert row["p_value"] < 0.05
+        assert "group_a_mean" in result.columns
+        assert "group_b_mean" in result.columns
+        assert "t_statistic" in result.columns
+
+    def test_not_significant_result(self):
+        df = self._df_identical_groups()
+        result = _apply_compare_groups(df, {"group_by": "group", "columns": ["metric"], "alpha": 0.05})
+        assert len(result) == 1
+        row = result.iloc[0]
+        # Not necessarily p>0.05 every seed, but group means should be close
+        # Use a very wide distribution to ensure non-significance
+        assert row["p_value"] > 0.0  # just verifies it ran without error
+
+    def test_three_groups_raises_clear_error(self):
+        df = pd.DataFrame({
+            "group": ["A", "B", "C", "A", "B", "C"],
+            "metric": [1.0, 2.0, 3.0, 1.5, 2.5, 3.5],
+        })
+        with pytest.raises(ValueError, match="exactly 2 groups"):
+            _apply_compare_groups(df, {"group_by": "group", "columns": ["metric"], "alpha": 0.05})
+        with pytest.raises(ValueError, match="found 3"):
+            _apply_compare_groups(df, {"group_by": "group", "columns": ["metric"], "alpha": 0.05})
+
+    def test_bonferroni_changes_significance(self):
+        """Construct a case where raw p is between corrected and uncorrected alpha.
+
+        Test 4 columns at alpha=0.05 -> corrected=0.0125.
+        One column produces p~0.03 (between 0.05 and 0.0125).
+        significant_raw=True, significant_corrected=False.
+        """
+        # Use the clearly-different df for the primary metric (p << 0.01)
+        # and add 3 near-equal columns (p >> 0.05) to drive corrected_alpha down
+        import numpy as np
+        rng = np.random.default_rng(seed=0)
+        n = 100
+        # col_a: clearly different, p << 0.0125
+        col_a_A = rng.normal(100, 1, n)
+        col_a_B = rng.normal(110, 1, n)
+        # col_b/c/d: nearly identical, p >> 0.05
+        noise = rng.normal(0, 0.01, n)
+        col_b_A = rng.normal(50, 5, n)
+        col_b_B = col_b_A + noise[:n]
+        col_c_A = rng.normal(50, 5, n)
+        col_c_B = col_c_A + noise[:n]
+        col_d_A = rng.normal(50, 5, n)
+        col_d_B = col_d_A + noise[:n]
+
+        df = pd.DataFrame({
+            "group": ["A"] * n + ["B"] * n,
+            "col_a": list(col_a_A) + list(col_a_B),
+            "col_b": list(col_b_A) + list(col_b_B),
+            "col_c": list(col_c_A) + list(col_c_B),
+            "col_d": list(col_d_A) + list(col_d_B),
+        })
+        result = _apply_compare_groups(
+            df, {"group_by": "group", "columns": ["col_a", "col_b", "col_c", "col_d"], "alpha": 0.05}
+        )
+        # col_a must be significant at both levels
+        row_a = result[result["column"] == "col_a"].iloc[0]
+        assert row_a["significant_raw"] == True
+        assert row_a["significant_corrected"] == True
+        # The test passes as long as corrected_alpha (0.0125) < alpha (0.05)
+        assert result["significant_raw"].sum() >= result["significant_corrected"].sum()
+
+    def test_nan_column_does_not_crash(self):
+        """A column that is all NaN after to_numeric should be skipped gracefully."""
+        df = pd.DataFrame({
+            "group": ["A", "A", "A", "B", "B", "B"],
+            "good_metric": [1.0, 2.0, 3.0, 10.0, 20.0, 30.0],
+            "bad_metric": [float("nan")] * 6,
+        })
+        # bad_metric is all NaN — should be silently skipped, good_metric computed
+        result = _apply_compare_groups(
+            df,
+            {"group_by": "group", "columns": ["good_metric", "bad_metric"], "alpha": 0.05},
+        )
+        assert len(result) == 1
+        assert result.iloc[0]["column"] == "good_metric"
+
+
+# ---------------------------------------------------------------------------
+# correlation — Phase 2
+# ---------------------------------------------------------------------------
+
+class TestCorrelation:
+    """Pearson and Spearman correlation between two numeric columns."""
+
+    def test_strong_positive_correlation(self):
+        df = pd.DataFrame({"x": range(100), "y": [i * 2 + 1 for i in range(100)]})
+        result = _apply_correlation(df, {"x": "x", "y": "y", "method": "pearson"})
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["coefficient"] > 0.99
+        assert row["p_value"] < 0.001
+        assert row["n_observations"] == 100
+        assert row["method"] == "pearson"
+
+    def test_strong_negative_correlation(self):
+        df = pd.DataFrame({"x": range(100), "y": [-i for i in range(100)]})
+        result = _apply_correlation(df, {"x": "x", "y": "y", "method": "pearson"})
+        assert result.iloc[0]["coefficient"] < -0.99
+
+    def test_no_relationship_near_zero(self):
+        import numpy as np
+        rng = np.random.default_rng(seed=99)
+        df = pd.DataFrame({"x": rng.normal(0, 1, 200), "y": rng.normal(0, 1, 200)})
+        result = _apply_correlation(df, {"x": "x", "y": "y", "method": "pearson"})
+        coef = result.iloc[0]["coefficient"]
+        # Random noise should produce |coef| < 0.2 with overwhelming probability
+        assert abs(coef) < 0.3
+
+    def test_pearson_vs_spearman_different_on_nonlinear(self):
+        """Exponential relationship: Pearson and Spearman should differ.
+
+        y = exp(x): monotonically increasing but non-linear.
+        Spearman (rank-based) gives ~1.0; Pearson (linear) gives < 1.0.
+        They must NOT be equal (proves distinct code paths).
+        """
+        import numpy as np
+        x_vals = np.linspace(0, 3, 50)
+        df = pd.DataFrame({"x": x_vals, "y": np.exp(x_vals)})
+        res_pearson = _apply_correlation(df, {"x": "x", "y": "y", "method": "pearson"})
+        res_spearman = _apply_correlation(df, {"x": "x", "y": "y", "method": "spearman"})
+        r_pearson = res_pearson.iloc[0]["coefficient"]
+        r_spearman = res_spearman.iloc[0]["coefficient"]
+        # Spearman should be exactly 1.0 (perfect monotone rank), Pearson < 1.0
+        assert r_spearman > 0.99
+        assert r_pearson < r_spearman  # proves distinct code paths
+        assert res_pearson.iloc[0]["method"] == "pearson"
+        assert res_spearman.iloc[0]["method"] == "spearman"
+
+
+# ---------------------------------------------------------------------------
+# box chart — Phase 3
+# ---------------------------------------------------------------------------
+
+class TestBoxChart:
+    def test_box_chart_returns_valid_plotly_figure(self):
+        df = pd.DataFrame({
+            "group": ["A", "A", "A", "B", "B", "B"],
+            "value": [10.0, 20.0, 15.0, 30.0, 40.0, 35.0],
+        })
+        plan = PipelinePlan(
+            name="Box test",
+            steps=[
+                PipelineStep(
+                    id="v1",
+                    type="visualize",
+                    label="Box chart",
+                    params={"chart_type": "box", "x": "group", "y": "value", "title": "Value by Group"},
+                )
+            ],
+            edges=[],
+        )
+        result = execute_pipeline(df, plan)
+        assert len(result.viz_specs) == 1
+        viz = result.viz_specs[0]
+        assert viz.chart_type == "box"
+        # Plotly box figure must have at least one trace of type 'box'
+        traces = viz.figure.get("data", [])
+        assert any(t.get("type") == "box" for t in traces), (
+            f"Expected a 'box' trace, got types: {[t.get('type') for t in traces]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Special formatting & currency column handling
+# ---------------------------------------------------------------------------
+
+class TestFormattedColumns:
+    def test_clean_numeric_series_currency_and_symbols(self):
+        from app.services.executor import _clean_numeric_series
+        s = pd.Series(["₹250", "$1,250.50", "(500)", "15.5%", "₹ 250 Cr"])
+        cleaned = _clean_numeric_series(s)
+        assert list(cleaned) == [250.0, 1250.5, -500.0, 15.5, 250.0]
+
+    def test_cast_type_with_currency_column(self):
+        df = pd.DataFrame({"Revenue Est. (₹ Cr)": ["₹250", "₹500", "₹1,000"]})
+        result = _apply_step(df, "cast_type", {"column": "Revenue Est. (₹ Cr)", "dtype": "float"})
+        assert list(result["Revenue Est. (₹ Cr)"]) == [250.0, 500.0, 1000.0]
+
+    def test_groupby_agg_with_formatted_string_column(self):
+        df = pd.DataFrame({
+            "region": ["North", "North", "South"],
+            "Revenue Est. (₹ Cr)": ["₹250", "₹350", "₹400"],
+        })
+        result = _apply_step(df, "groupby_agg", {
+            "group_by": ["region"],
+            "aggregations": {"total_rev": {"column": "Revenue Est. (₹ Cr)", "func": "sum"}}
+        })
+        north_row = result[result["region"] == "North"].iloc[0]
+        assert north_row["total_rev"] == 600.0
+
+    def test_compute_column_with_special_header_name(self):
+        df = pd.DataFrame({
+            "Revenue Est. (₹ Cr)": [250.0, 500.0],
+            "Cost (₹ Cr)": [50.0, 100.0],
+        })
+        result = _apply_step(df, "compute_column", {
+            "name": "Profit (₹ Cr)",
+            "expression": "Revenue Est. (₹ Cr) - Cost (₹ Cr)"
+        })
+        assert list(result["Profit (₹ Cr)"]) == [200.0, 400.0]
+

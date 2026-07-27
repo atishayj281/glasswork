@@ -13,12 +13,36 @@ import type { PipelinePlan, PipelineStep, ExecutionResult, VizSpec, StepLog } fr
 // the row and calls the already-compiled function, which is orders of
 // magnitude cheaper per row.
 
+/**
+ * Extract numeric value from formatted strings (e.g. "₹250", "$1,250.50", "15.5%", "(500)", "₹ 250 Cr")
+ */
+export function parseFormattedNumber(val: any): number {
+  if (typeof val === "number") return isNaN(val) ? 0 : val;
+  if (val === null || val === undefined || val === "") return 0;
+
+  let str = String(val).trim();
+  if (!str) return 0;
+
+  // Accounting parentheses "(123.45)" -> "-123.45"
+  if (/^\((.*)\)$/.test(str)) {
+    str = "-" + str.slice(1, -1);
+  }
+
+  // Remove currency symbols (₹, $, €, £, ¥), commas, percent signs, and whitespace
+  str = str.replace(/[₹$€£¥\s,%]/g, "");
+
+  // Extract first numeric sequence (including sign and decimal point)
+  const match = str.match(/[-+]?\d*\.?\d+/);
+  if (!match) return 0;
+
+  const num = parseFloat(match[0]);
+  return isNaN(num) ? 0 : num;
+}
+
 function compileExpression(
   expression: string,
   columnNames: string[]
 ): (row: Record<string, any>) => number {
-  // Sort once (outside the row loop) to avoid partial replacement issues,
-  // e.g. replacing 'tax' inside 'tax_rate'.
   const cols = [...columnNames].sort((a, b) => b.length - a.length);
 
   let expr = expression;
@@ -26,13 +50,19 @@ function compileExpression(
 
   cols.forEach((col) => {
     const escapedCol = col.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
-    const regex = new RegExp(`\\b${escapedCol}\\b`, "g");
-    if (regex.test(expr)) {
+    const backtickedPattern = new RegExp("`" + escapedCol + "`", "g");
+    if (backtickedPattern.test(expr)) {
       const idx = usedCols.length;
       usedCols.push(col);
-      // Replace with a placeholder that reads from a positional array,
-      // e.g. revenue -> __v[0], shipping_cost -> __v[1]
-      expr = expr.replace(regex, `__v[${idx}]`);
+      expr = expr.replace(backtickedPattern, `__v[${idx}]`);
+    } else {
+      const isIdentifier = /^[a-z_$][a-z0-9_$]*$/i.test(col);
+      const regex = isIdentifier ? new RegExp(`\\b${escapedCol}\\b`, "g") : new RegExp(escapedCol, "g");
+      if (regex.test(expr)) {
+        const idx = usedCols.length;
+        usedCols.push(col);
+        expr = expr.replace(regex, `__v[${idx}]`);
+      }
     }
   });
 
@@ -44,7 +74,6 @@ function compileExpression(
 
   let compiled: (v: number[]) => number;
   try {
-    // Compiled ONCE per step, not once per row.
     // eslint-disable-next-line no-new-func
     compiled = new Function("__v", `return (${expr});`) as (v: number[]) => number;
   } catch {
@@ -52,10 +81,7 @@ function compileExpression(
   }
 
   return (row: Record<string, any>) => {
-    const v = usedCols.map((c) => {
-      const val = row[c];
-      return typeof val === "number" ? val : parseFloat(val) || 0;
-    });
+    const v = usedCols.map((c) => parseFormattedNumber(row[c]));
     try {
       const result = compiled(v);
       return typeof result === "number" && !isNaN(result) ? result : 0;
@@ -170,9 +196,9 @@ function applyCastType(df: any[], params: Record<string, any>): any[] {
     if (val === null || val === undefined) return newRow;
 
     if (dtype === "int") {
-      newRow[col] = parseInt(val, 10) || 0;
+      newRow[col] = Math.round(parseFormattedNumber(val));
     } else if (dtype === "float") {
-      newRow[col] = parseFloat(val) || 0.0;
+      newRow[col] = parseFormattedNumber(val);
     } else if (dtype === "datetime") {
       const parsed = Date.parse(val);
       newRow[col] = isNaN(parsed) ? val : new Date(parsed).toISOString();
@@ -185,7 +211,7 @@ function applyCastType(df: any[], params: Record<string, any>): any[] {
 
 function runAggFunction(rows: any[], col: string, func: string): number {
   if (rows.length === 0) return 0;
-  const values = rows.map((r) => parseFloat(r[col])).filter((v) => !isNaN(v));
+  const values = rows.map((r) => parseFormattedNumber(r[col]));
   if (values.length === 0 && func !== "count") return 0;
 
   if (func === "sum") return values.reduce((a, b) => a + b, 0);
@@ -298,6 +324,162 @@ function applyComputeColumn(df: any[], params: Record<string, any>): any[] {
   });
 }
 
+function normalCDF(z: number): number {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  const cdf = 1 - (1 / Math.sqrt(2 * Math.PI)) * Math.exp(-0.5 * z * z) * poly;
+  return z >= 0 ? cdf : 1 - cdf;
+}
+
+function twoTailedPValue(tStat: number, df: number): number {
+  const absT = Math.abs(tStat);
+  if (isNaN(absT) || !isFinite(absT)) return 1.0;
+  // Standard normal CDF approximation for p-value calculation
+  const p = 2 * (1 - normalCDF(absT));
+  return Math.max(0, Math.min(1, p));
+}
+
+function getRanks(vals: number[]): number[] {
+  const indexed = vals.map((v, i) => ({ v, i }));
+  indexed.sort((a, b) => a.v - b.v);
+  const ranks = new Array(vals.length);
+  let i = 0;
+  while (i < indexed.length) {
+    let j = i;
+    while (j < indexed.length && indexed[j].v === indexed[i].v) {
+      j++;
+    }
+    const rank = (i + 1 + j) / 2;
+    for (let k = i; k < j; k++) {
+      ranks[indexed[k].i] = rank;
+    }
+    i = j;
+  }
+  return ranks;
+}
+
+function applyCompareGroups(df: any[], params: Record<string, any>): any[] {
+  const groupCol = params.group_by;
+  const testCols: string[] = params.columns || [];
+  const alpha = Number(params.alpha ?? 0.05);
+
+  if (!groupCol || !df.length) return [];
+
+  const uniqueGroups = Array.from(
+    new Set(
+      df
+        .map((r) => r[groupCol])
+        .filter((v) => v !== null && v !== undefined && v !== "")
+        .map((v) => String(v))
+    )
+  ).sort();
+
+  if (uniqueGroups.length !== 2) return [];
+
+  const [groupAVal, groupBVal] = uniqueGroups;
+  const dfA = df.filter((r) => String(r[groupCol]) === groupAVal);
+  const dfB = df.filter((r) => String(r[groupCol]) === groupBVal);
+
+  const correctedAlpha = alpha / Math.max(testCols.length, 1);
+  const results: any[] = [];
+
+  testCols.forEach((col) => {
+    const aVals = dfA.map((r) => parseFormattedNumber(r[col])).filter((v) => !isNaN(v));
+    const bVals = dfB.map((r) => parseFormattedNumber(r[col])).filter((v) => !isNaN(v));
+
+    if (aVals.length < 2 || bVals.length < 2) return;
+
+    const aMean = aVals.reduce((sum, v) => sum + v, 0) / aVals.length;
+    const bMean = bVals.reduce((sum, v) => sum + v, 0) / bVals.length;
+
+    const aVar = aVals.reduce((sum, v) => sum + Math.pow(v - aMean, 2), 0) / (aVals.length - 1);
+    const bVar = bVals.reduce((sum, v) => sum + Math.pow(v - bMean, 2), 0) / (bVals.length - 1);
+
+    const se = Math.sqrt(aVar / aVals.length + bVar / bVals.length);
+    const tStat = se === 0 ? 0 : (bMean - aMean) / se;
+
+    const num = Math.pow(aVar / aVals.length + bVar / bVals.length, 2);
+    const den = Math.pow(aVar / aVals.length, 2) / (aVals.length - 1) + Math.pow(bVar / bVals.length, 2) / (bVals.length - 1);
+    const dof = den === 0 ? 1 : num / den;
+
+    const pVal = twoTailedPValue(tStat, dof);
+
+    results.push({
+      column: col,
+      group_a: groupAVal,
+      group_b: groupBVal,
+      group_a_mean: Math.round(aMean * 1e6) / 1e6,
+      group_b_mean: Math.round(bMean * 1e6) / 1e6,
+      mean_diff: Math.round((bMean - aMean) * 1e6) / 1e6,
+      t_statistic: Math.round(tStat * 1e6) / 1e6,
+      p_value: Math.round(pVal * 1e6) / 1e6,
+      significant_raw: pVal < alpha,
+      significant_corrected: pVal < correctedAlpha,
+    });
+  });
+
+  return results;
+}
+
+function applyCorrelation(df: any[], params: Record<string, any>): any[] {
+  const xCol = params.x;
+  const yCol = params.y;
+  const method = params.method || "pearson";
+
+  if (!xCol || !yCol || !df.length) return [];
+
+  const pairs: { x: number; y: number }[] = [];
+  df.forEach((r) => {
+    const xVal = parseFormattedNumber(r[xCol]);
+    const yVal = parseFormattedNumber(r[yCol]);
+    if (!isNaN(xVal) && !isNaN(yVal)) {
+      pairs.push({ x: xVal, y: yVal });
+    }
+  });
+
+  if (pairs.length < 3) return [];
+
+  let xVals = pairs.map((p) => p.x);
+  let yVals = pairs.map((p) => p.y);
+
+  if (method === "spearman") {
+    xVals = getRanks(xVals);
+    yVals = getRanks(yVals);
+  }
+
+  const n = pairs.length;
+  const xMean = xVals.reduce((a, b) => a + b, 0) / n;
+  const yMean = yVals.reduce((a, b) => a + b, 0) / n;
+
+  let num = 0;
+  let denX = 0;
+  let denY = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xVals[i] - xMean;
+    const dy = yVals[i] - yMean;
+    num += dx * dy;
+    denX += dx * dx;
+    denY += dy * dy;
+  }
+
+  const den = Math.sqrt(denX * denY);
+  const coef = den === 0 ? 0 : num / den;
+
+  const tStat = Math.abs(coef) === 1 ? 999 : (coef * Math.sqrt(n - 2)) / Math.sqrt(1 - coef * coef);
+  const pVal = twoTailedPValue(tStat, n - 2);
+
+  return [
+    {
+      x: xCol,
+      y: yCol,
+      method,
+      coefficient: Math.round(coef * 1e6) / 1e6,
+      p_value: Math.round(pVal * 1e6) / 1e6,
+      n_observations: n,
+    },
+  ];
+}
+
 function buildPlotlyChart(df: Record<string, any>[], params: Record<string, any>): Record<string, any> {
   const chartType = params.chart_type || "bar";
   const x = params.x;
@@ -367,6 +549,18 @@ function buildPlotlyChart(df: Record<string, any>[], params: Record<string, any>
     } else {
       layout.title = "Not enough numeric columns for heatmap";
     }
+  } else if (chartType === "box" && x && y) {
+    const groups: Record<string, any[]> = {};
+    df.forEach((r) => {
+      const gVal = String(r[x]);
+      if (!groups[gVal]) groups[gVal] = [];
+      groups[gVal].push(typeof r[y] === "number" ? r[y] : parseFloat(r[y]) || 0);
+    });
+    data = Object.keys(groups).map((gVal) => ({
+      type: "box",
+      name: gVal,
+      y: groups[gVal]
+    }));
   } else if (chartType === "pie" && x && y) {
     const labels = df.map((r) => String(r[x]));
     const values = df.map((r) => (typeof r[y] === "number" ? r[y] : parseFloat(r[y]) || 0));
@@ -506,6 +700,12 @@ export function executePipelineLocally(df: Record<string, any>[], plan: Pipeline
       } else if (step.type === "compute_column") {
         resultData = applyComputeColumn(inputData, step.params);
         message = `Computed column '${step.params.name}'`;
+      } else if (step.type === "compare_groups") {
+        resultData = applyCompareGroups(inputData, step.params);
+        message = "Compared group distributions (t-test)";
+      } else if (step.type === "correlation") {
+        resultData = applyCorrelation(inputData, step.params);
+        message = "Computed correlation coefficient";
       } else if (step.type === "visualize") {
         // Build chart
         const chartFig = buildPlotlyChart(inputData, step.params);

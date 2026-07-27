@@ -13,8 +13,12 @@ from app.services.budget import check_budget, record_llm_call
 router = APIRouter()
 
 
+from app.middleware.gating import check_provider_access
+
+
 class ChatRequest(BaseModel):
     message: str
+    provider: str | None = "default"
 
 
 @router.post("/chat/{session_id}")
@@ -25,6 +29,9 @@ async def chat(
 ):
     session = require_session_access(session_id, uid)
 
+    if body.provider and body.provider != "default":
+        check_provider_access(uid, body.provider)
+
     # Protect LLM endpoints with per-second rate limiting
     rate_limit_key = uid if uid else f"session_{session_id}"
     limiter.check(rate_limit_key)
@@ -32,7 +39,7 @@ async def chat(
     # Enforce per-uid daily LLM budget (only for authenticated users)
     if uid:
         try:
-            check_budget(uid, BUDGET_MAX_CALLS_PER_DAY, BUDGET_MAX_TOKENS_PER_DAY)
+            check_budget(uid)
         except ValueError as e:
             raise HTTPException(status_code=429, detail=str(e))
 

@@ -13,6 +13,8 @@ const STEP_TYPES = [
   "deduplicate",
   "compute_column",
   "visualize",
+  "compare_groups",
+  "correlation",
 ] as const;
 
 interface Props {
@@ -46,7 +48,7 @@ export default function StepEditor({ step, onChange, onClose }: Props) {
       case "visualize":
         return (
           <>
-            <Select label="Chart Type" value={String(step.params.chart_type ?? "bar")} options={["bar", "line", "scatter", "pie", "histogram", "heatmap"]} onChange={(v) => updateParam("chart_type", v)} />
+            <Select label="Chart Type" value={String(step.params.chart_type ?? "bar")} options={["bar", "line", "scatter", "pie", "histogram", "heatmap", "box"]} onChange={(v) => updateParam("chart_type", v)} />
             <Input label="X Axis" value={String(step.params.x ?? "")} onChange={(e) => updateParam("x", e.target.value)} />
             <Input label="Y Axis" value={String(step.params.y ?? "")} onChange={(e) => updateParam("y", e.target.value)} />
             <Input label="Title" value={String(step.params.title ?? step.label)} onChange={(e) => updateParam("title", e.target.value)} />
@@ -69,6 +71,35 @@ export default function StepEditor({ step, onChange, onClose }: Props) {
       case "select_columns":
         return (
           <Input label="Columns (comma-separated)" value={String((step.params.columns as string[])?.join(", ") ?? "")} onChange={(e) => updateParam("columns", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} />
+        );
+      case "compare_groups":
+        return (
+          <>
+            <Input label="Group By Column" value={String(step.params.group_by ?? "")} onChange={(e) => updateParam("group_by", e.target.value)} />
+            <Input
+              label="Numeric Columns to Test (comma-separated)"
+              value={String((step.params.columns as string[])?.join(", ") ?? "")}
+              onChange={(e) => updateParam("columns", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))}
+            />
+            <Input
+              label="Alpha (significance level, default 0.05)"
+              value={String(step.params.alpha ?? "0.05")}
+              onChange={(e) => updateParam("alpha", parseFloat(e.target.value) || 0.05)}
+            />
+          </>
+        );
+      case "correlation":
+        return (
+          <>
+            <Input label="X Column" value={String(step.params.x ?? "")} onChange={(e) => updateParam("x", e.target.value)} />
+            <Input label="Y Column" value={String(step.params.y ?? "")} onChange={(e) => updateParam("y", e.target.value)} />
+            <Select
+              label="Method"
+              value={String(step.params.method ?? "pearson")}
+              options={["pearson", "spearman"]}
+              onChange={(v) => updateParam("method", v)}
+            />
+          </>
         );
       default:
         return (

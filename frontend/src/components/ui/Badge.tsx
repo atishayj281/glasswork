@@ -43,6 +43,8 @@ export function stepTypeBadgeVariant(type: string): BadgeVariant {
     cast_type: "default",
     deduplicate: "default",
     compute_column: "cyan",
+    compare_groups: "orange",
+    correlation: "violet",
   };
   return map[type] ?? "default";
 }

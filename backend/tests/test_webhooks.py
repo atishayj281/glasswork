@@ -82,7 +82,7 @@ def test_webhook_trigger_success_and_errors():
 
         # 4. Oversized file -> 413
         large_csv = b"amount,category\n" + (b"100,test\n" * 100000)
-        with patch("app.api.webhooks.config.MAX_UPLOAD_MB", 0):  # limit to 0MB so test file triggers 413
+        with patch("app.config.MAX_UPLOAD_MB", 0):  # limit to 0MB so test file triggers 413
             resp_oversized = client.post(
                 f"/api/webhooks/{pipeline_id}/trigger",
                 headers={"X-Webhook-Secret": raw_secret},

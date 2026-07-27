@@ -4,6 +4,12 @@ export default {
   theme: {
     extend: {
       colors: {
+        "bg-void": "#0B0E14",
+        "bg-surface": "#12161F",
+        "accent-signal": "#F5A623",
+        "accent-flow": "#4DD9C4",
+        "text-primary": "#E7E9EE",
+        "text-muted": "#8B92A3",
         aegis: {
           50: "#ecfeff",
           100: "#cffafe",
@@ -31,9 +37,9 @@ export default {
         },
       },
       fontFamily: {
-        display: ["Orbitron", "sans-serif"],
-        sans: ["Exo 2", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "monospace"],
+        display: ['"Space Grotesk"', 'sans-serif'],
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
       },
       boxShadow: {
         "neon-sm": "0 0 8px rgba(34, 211, 238, 0.3)",

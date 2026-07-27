@@ -23,19 +23,42 @@ def get_supabase_client():
     return _supabase_client
 
 
+from app.billing.tiers import TierConfig
+from app.middleware.gating import require_tier_limit
+from app.services.user_store import user_store
+
+
 @router.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
     header_row: int | None = Query(None, ge=0, description="0-based header row (auto-detect if omitted)"),
     sheet_index: int = Query(0, ge=0, description="Excel sheet index"),
     uid: str = Depends(get_current_user),
+    tier_cfg: TierConfig = Depends(require_tier_limit("uploads")),
 ):
     """Receive file from frontend, upload to Supabase Storage using service role key (bypasses RLS),
     then ingest the data into a session."""
     content = await file.read()
     filename = file.filename or "upload"
-    size_kb = len(content) / 1024
-    logger.info("[upload] uid=%s file=%r size=%.1fKB header_row=%s sheet=%d", uid, filename, size_kb, header_row, sheet_index)
+    size_mb = len(content) / (1024 * 1024)
+
+    # Check tier max file size
+    if size_mb > tier_cfg.max_file_size_mb:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "limit_exceeded",
+                "tier": tier_cfg.name.value,
+                "limit": "max_file_size_mb",
+                "message": f"File size ({size_mb:.1f} MB) exceeds maximum allowed size ({tier_cfg.max_file_size_mb} MB) for the {tier_cfg.label} plan.",
+                "upgrade_url": "/pricing",
+            },
+        )
+
+    logger.info("[upload] uid=%s file=%r size=%.1fKB header_row=%s sheet=%d", uid, filename, len(content) / 1024, header_row, sheet_index)
+
+    # Record upload usage
+    user_store.record_usage(uid, "uploads")
 
     # Upload to Supabase Storage using service role key — bypasses RLS
     ext = filename.rsplit(".", 1)[-1] if "." in filename else "bin"
