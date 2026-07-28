@@ -1,0 +1,29 @@
+# ─── Environment / secrets ───────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Dependencies & build output ─────────────────────────────────────────────
+node_modules/
+dist/
+
+# ─── TypeScript incremental build cache ──────────────────────────────────────
+tsconfig.tsbuildinfo
+
+# ─── Deployment platform artifacts ───────────────────────────────────────────
+.firebase/
+.vercel/
+.firebaserc
+firebase.json
+
+# ─── Agent / tooling config ──────────────────────────────────────────────────
+.agents/
+.claude/
+skills-lock.json
+
+# ─── OS / editor noise ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
