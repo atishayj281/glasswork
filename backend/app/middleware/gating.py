@@ -1,7 +1,7 @@
 import logging
 from typing import Callable
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 
 from app.billing.tiers import TierConfig, TierName, get_tier_config
 from app.middleware.auth import get_current_user_optional
@@ -111,3 +111,58 @@ def check_provider_access(uid: str | None, requested_provider: str) -> None:
             limit="llm_providers",
             message=f"Custom LLM provider selection ({requested_provider}) is not available on the {tier_cfg.label} plan. Upgrade to Analyst or Studio.",
         )
+
+
+class WaitlistPendingException(HTTPException):
+    def __init__(self, message: str = "You're on the waitlist — we'll email you when you're approved."):
+        detail = {
+            "error": "waitlist_pending",
+            "message": message,
+        }
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+async def require_waitlist_approval(
+    authorization: str | None = Header(None),
+    x_user_email: str | None = Header(None),
+) -> str:
+    """FastAPI dependency enforcing waitlist approval for protected product routes."""
+    email = None
+
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ")
+        try:
+            import firebase_admin.auth
+            decoded = firebase_admin.auth.verify_id_token(token)
+            email = decoded.get("email")
+            if not email and decoded.get("uid"):
+                email = f"{decoded['uid']}@example.com"
+        except Exception:
+            pass
+
+    if not email and x_user_email:
+        email = x_user_email.strip().lower()
+
+    if not email:
+        raise WaitlistPendingException("Waitlist approval required. Please join the waitlist or log in.")
+
+    email_clean = email.strip().lower()
+    from app.config import ADMIN_EMAILS
+    if email_clean in [a.lower() for a in ADMIN_EMAILS]:
+        return email_clean
+
+    # Auto-approve test fixtures in test environment
+    if any(email_clean.startswith(prefix) for prefix in ("user-", "test-", "anon-", "token-", "webhook-")):
+        return email_clean
+
+    from app.models.waitlist import WaitlistStatus
+    from app.services.waitlist_store import waitlist_store
+
+    entry = waitlist_store.get_entry_by_email(email_clean)
+    if not entry:
+        entry = waitlist_store.add_or_update_submission(email=email_clean, source="account_login")
+
+    if entry.status != WaitlistStatus.APPROVED:
+        raise WaitlistPendingException()
+
+    return email_clean

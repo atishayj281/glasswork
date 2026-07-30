@@ -13,7 +13,7 @@ from app.services.budget import check_budget, record_llm_call
 router = APIRouter()
 
 
-from app.middleware.gating import check_provider_access
+from app.middleware.gating import check_provider_access, require_waitlist_approval
 
 
 class ChatRequest(BaseModel):
@@ -26,6 +26,7 @@ async def chat(
     session_id: str,
     body: ChatRequest,
     uid: str | None = Depends(get_current_user_optional),
+    _waitlist_user: str = Depends(require_waitlist_approval),
 ):
     session = require_session_access(session_id, uid)
 

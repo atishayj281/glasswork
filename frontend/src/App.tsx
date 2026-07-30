@@ -17,7 +17,8 @@ import Button from "./components/ui/Button";
 import ProgressBar from "./components/ui/ProgressBar";
 import { useAuth } from "./hooks/useAuth";
 import { useBilling } from "./hooks/useBilling";
-import { claimSession, updatePipeline, setLimitExceededHandler, getSessionProfile, getPipeline } from "./lib/api";
+import { WaitlistPendingScreen } from "./components/WaitlistPendingScreen";
+import { claimSession, updatePipeline, setLimitExceededHandler, getSessionProfile, getPipeline, getWaitlistStatus } from "./lib/api";
 import { savePipeline } from "./lib/firestore";
 
 export default function App() {
@@ -57,9 +58,33 @@ export default function App() {
   const [loadingPipeline, setLoadingPipeline] = useState(false);
   // Tier the user wants to upgrade to — stored when unauthenticated, resumed after login
   const [pendingTier, setPendingTier] = useState<"analyst" | "studio" | null>(null);
+  // Waitlist status state for logged-in user
+  const [waitlistStatus, setWaitlistStatus] = useState<"approved" | "pending" | "rejected" | "unlisted" | null>(null);
+  const [checkingWaitlist, setCheckingWaitlist] = useState<boolean>(false);
 
   const tierName = (billing?.tier ?? "explorer").toLowerCase();
   const canSaveWebhooks = tierName === "analyst" || tierName === "studio";
+
+  // ── Waitlist Status Check on Login ──────────────────────────────────────────
+  useEffect(() => {
+    if (!user) {
+      setWaitlistStatus(null);
+      setCheckingWaitlist(false);
+      return;
+    }
+    setCheckingWaitlist(true);
+    getWaitlistStatus(user.email || undefined)
+      .then((res) => {
+        setWaitlistStatus(res.status);
+      })
+      .catch((err) => {
+        console.error("Failed to fetch waitlist status:", err);
+        setWaitlistStatus("pending");
+      })
+      .finally(() => {
+        setCheckingWaitlist(false);
+      });
+  }, [user?.email, user?.uid]);
 
   // ── Register 402 interceptor callback ──────────────────────────────────────
   useEffect(() => {
@@ -257,6 +282,25 @@ export default function App() {
         onNavigateBack={currentView === "auth" && !pendingTier ? () => setCurrentView("landing") : undefined}
       />
     );
+  }
+
+  if (user && checkingWaitlist) {
+    return (
+      <div className="h-screen flex items-center justify-center grid-bg">
+        <div className="top-progress-bar" />
+        <div className="text-center space-y-4">
+          <p className="font-display text-2xl font-bold tracking-[0.3em] gradient-text">
+            GLASSWORK
+          </p>
+          <ProgressBar variant="indeterminate" className="w-48 mx-auto" />
+          <p className="text-xs font-mono text-[#8B92A3]">Verifying waitlist access…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (user && waitlistStatus === "pending") {
+    return <WaitlistPendingScreen userEmail={user.email} onSignOut={logout} />;
   }
 
   return (

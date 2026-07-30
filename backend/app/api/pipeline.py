@@ -48,7 +48,7 @@ async def update_pipeline(
     return plan
 
 
-from app.middleware.gating import require_tier_limit
+from app.middleware.gating import require_tier_limit, require_waitlist_approval
 from app.services.user_store import user_store
 
 
@@ -58,6 +58,7 @@ async def generate(
     body: GenerateRequest | None = None,
     uid: str | None = Depends(get_current_user_optional),
     tier_cfg = Depends(require_tier_limit("pipeline_generations")),
+    _waitlist_user: str = Depends(require_waitlist_approval),
 ) -> PipelinePlan:
     logger.info("[POST /generate] session=%s intent=%r", session_id, body.intent if body else None)
     session = require_session_access(session_id, uid)
@@ -132,6 +133,7 @@ async def execute(
     background_tasks: BackgroundTasks,
     uid: str | None = Depends(get_current_user_optional),
     tier_cfg = Depends(require_tier_limit("pipeline_runs")),
+    _waitlist_user: str = Depends(require_waitlist_approval),
 ):
     logger.info("[POST /execute] session=%s triggering execution", session_id)
     session = require_session_access(session_id, uid)

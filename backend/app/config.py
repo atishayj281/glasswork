@@ -28,5 +28,17 @@ NVIDIA_NIM_API_KEY = os.getenv("NVIDIA_NIM_API_KEY", "")
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 if NVIDIA_NIM_API_KEY and not os.environ.get("NVIDIA_API_KEY"):
     os.environ["NVIDIA_API_KEY"] = NVIDIA_NIM_API_KEY
-if NVIDIA_API_KEY and not os.environ.get("NVIDIA_NIM_API_KEY"):
-    os.environ["NVIDIA_NIM_API_KEY"] = NVIDIA_API_KEY
+# Admin Configuration for Waitlist & System Management
+ADMIN_EMAILS = [
+    e.strip().lower()
+    for e in os.getenv("ADMIN_EMAILS", "atishay.jain1203@gmail.com").split(",")
+    if e.strip()
+]
+ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "")
+
+# Transactional Email (SMTP) Configuration
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "noreply@aegispipeline.com")
