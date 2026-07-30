@@ -239,11 +239,18 @@ export async function getSessionProfile(sessionId: string): Promise<import("../t
 }
 
 // ── Waitlist ─────────────────────────────────────────────────────────────────
-export async function submitWaitlistEmail(email: string, source: string = "pricing_page") {
+export async function submitWaitlistEmail(email: string, useCase?: string, source: string = "landing_page") {
   const { data } = await api.post<{ status: string; message: string; email: string }>("/waitlist", {
     email,
+    use_case: useCase,
     source,
   });
+  return data;
+}
+
+export async function getWaitlistStatus(email?: string): Promise<{ status: "approved" | "pending" | "rejected" | "unlisted"; email?: string }> {
+  const url = email ? `/waitlist/status?email=${encodeURIComponent(email)}` : "/waitlist/status";
+  const { data } = await api.get<{ status: "approved" | "pending" | "rejected" | "unlisted"; email?: string }>(url);
   return data;
 }
 

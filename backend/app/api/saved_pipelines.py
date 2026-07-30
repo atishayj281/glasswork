@@ -38,7 +38,7 @@ class RotateSecretResponse(BaseModel):
     webhook_secret: str
 
 
-from app.middleware.gating import require_tier_limit
+from app.middleware.gating import require_tier_limit, require_waitlist_approval
 
 
 @router.post(
@@ -50,6 +50,7 @@ async def promote_pipeline(
     req: PromotePipelineRequest,
     user_uid: str = Depends(get_current_user),
     tier_cfg = Depends(require_tier_limit("saved_pipelines")),
+    _waitlist_user: str = Depends(require_waitlist_approval),
 ) -> SavedPipelineCreateResponse:
     """Promote a session's pipeline to a persistent SavedPipeline."""
     session = require_session_access(req.session_id, user_uid)

@@ -24,7 +24,7 @@ def get_supabase_client():
 
 
 from app.billing.tiers import TierConfig
-from app.middleware.gating import require_tier_limit
+from app.middleware.gating import require_tier_limit, require_waitlist_approval
 from app.services.user_store import user_store
 
 
@@ -35,6 +35,7 @@ async def upload_file(
     sheet_index: int = Query(0, ge=0, description="Excel sheet index"),
     uid: str = Depends(get_current_user),
     tier_cfg: TierConfig = Depends(require_tier_limit("uploads")),
+    _waitlist_user: str = Depends(require_waitlist_approval),
 ):
     """Receive file from frontend, upload to Supabase Storage using service role key (bypasses RLS),
     then ingest the data into a session."""

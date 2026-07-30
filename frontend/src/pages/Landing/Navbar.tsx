@@ -60,11 +60,17 @@ export default function Navbar({ onLaunchStudio, onViewPricing }: NavbarProps) {
 
           {/* Primary Amber Solid CTA */}
           <button
-            onClick={onLaunchStudio}
+            onClick={() => {
+              const el = document.getElementById("waitlist-form");
+              if (el) {
+                el.scrollIntoView({ behavior: "smooth" });
+              } else {
+                onLaunchStudio();
+              }
+            }}
             className="px-4 py-1.5 rounded-lg bg-[#F5A623] hover:bg-[#f5a623]/90 text-[#0B0E14] font-mono text-xs font-bold transition-all shadow-[0_0_15px_rgba(245,166,35,0.3)] hover:shadow-[0_0_20px_rgba(245,166,35,0.5)] active:scale-95 flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A623] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B0E14]"
           >
-            <Play className="w-3.5 h-3.5 fill-[#0B0E14]" />
-            <span>Launch Studio</span>
+            <span>Join Waitlist</span>
           </button>
         </div>
 
