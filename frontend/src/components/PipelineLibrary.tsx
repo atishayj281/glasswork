@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { User } from "firebase/auth";
-import type { DatasetProfile, PipelinePlan, SavedPipeline } from "../types";
+import type { DatasetProfile, PipelinePlan, PipelineStep, SavedPipeline } from "../types";
 import { getUserPipelines, savePipeline, deletePipeline } from "../lib/firestore";
 import ProgressBar from "./ui/ProgressBar";
 
@@ -78,12 +78,86 @@ export default function PipelineLibrary({ user, tier, currentPipeline, profile, 
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const plan = JSON.parse(reader.result as string) as PipelinePlan;
-        if (!plan.steps || !plan.edges) throw new Error("Invalid pipeline JSON");
+        const raw = JSON.parse(reader.result as string);
+        const parsed = (raw && typeof raw === "object" ? raw.plan || raw.pipeline || raw : null) as any;
+        if (!parsed || !Array.isArray(parsed.steps)) {
+          throw new Error("Missing 'steps' array in pipeline JSON");
+        }
+
+        const normalizedSteps: PipelineStep[] = parsed.steps.map((s: any, idx: number) => {
+          let stepType = String(s.type || "filter").toLowerCase();
+          const typeMap: Record<string, string> = {
+            group_by: "groupby_agg",
+            groupby: "groupby_agg",
+            aggregate: "groupby_agg",
+            agg: "groupby_agg",
+            select: "select_columns",
+            select_column: "select_columns",
+            fillna: "fill_na",
+            drop_na: "fill_na",
+            dropna: "fill_na",
+            cast: "cast_type",
+            type_cast: "cast_type",
+            chart: "visualize",
+            plot: "visualize",
+            vis: "visualize",
+            compute: "compute_column",
+            add_column: "compute_column",
+            calculate: "compute_column",
+            dedup: "deduplicate",
+            drop_duplicates: "deduplicate",
+          };
+          if (typeMap[stepType]) stepType = typeMap[stepType];
+
+          const params = s.params && typeof s.params === "object" ? { ...s.params } : {};
+          // Normalize filter operators if legacy/custom syntax was imported
+          if (stepType === "filter" && params.op) {
+            const opMap: Record<string, string> = {
+              "==": "eq",
+              "!=": "neq",
+              ">": "gt",
+              ">=": "gte",
+              "<": "lt",
+              "<=": "lte",
+              "equals": "eq",
+            };
+            if (opMap[params.op]) params.op = opMap[params.op];
+          }
+
+          const hasValidPos =
+            s.position &&
+            typeof s.position === "object" &&
+            typeof s.position.x === "number" &&
+            typeof s.position.y === "number";
+
+          return {
+            id: String(s.id || `step_${Date.now()}_${idx}`),
+            type: stepType as any,
+            label: String(s.label || s.name || s.type || `Step ${idx + 1}`),
+            params,
+            position: hasValidPos ? { x: s.position.x, y: s.position.y } : { x: 100, y: idx * 120 },
+          };
+        });
+
+        const normalizedEdges = Array.isArray(parsed.edges)
+          ? parsed.edges.map((edge: any) => ({
+              source: String(edge.source),
+              target: String(edge.target),
+            }))
+          : [];
+
+        const plan: PipelinePlan = {
+          name: String(parsed.name || file.name.replace(/\.json$/i, "") || "Imported Pipeline"),
+          summary_template: parsed.summary_template || null,
+          steps: normalizedSteps,
+          edges: normalizedEdges,
+        };
+
         onLoad(plan);
         onClose();
-      } catch {
-        setError("Invalid pipeline file — must be a valid pipeline JSON export");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(`Invalid pipeline file: ${msg}`);
       }
     };
     reader.readAsText(file);

@@ -1,0 +1,62 @@
+# ─── Version control ─────────────────────────────────────────────────────────
+.git
+.github
+.gitignore
+
+# ─── Environment / secrets (never bake into images) ──────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Firebase / GCP service account keys ────────────────────────────────────
+*firebase-adminsdk*.json
+*service-account*.json
+*serviceaccount*.json
+*-credentials.json
+*-key.json
+
+# ─── Python artifacts ────────────────────────────────────────────────────────
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.py[cod]
+backend/.pytest_cache/
+backend/.venv/
+backend/venv/
+backend/*.egg-info/
+
+# ─── Node / frontend build artifacts ─────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.firebase/
+frontend/.vercel/
+frontend/.agents/
+frontend/.claude/
+frontend/tsconfig.tsbuildinfo
+frontend/skills-lock.json
+
+# ─── Docker meta (don't embed compose config in images) ──────────────────────
+docker-compose.yml
+docker-compose.*.yml
+*/.dockerignore
+
+# ─── Data / runtime state ─────────────────────────────────────────────────────
+.aegis/
+*.log
+*.parquet
+
+# ─── OS / editor noise ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# ─── Docs & demo (not needed at runtime) ─────────────────────────────────────
+docs/
+demo/
+README.md
+SECURITY.md
+LICENSE
+sample_data.csv
+render.yaml

@@ -1,0 +1,41 @@
+# ─── Environment / secrets ───────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Firebase / GCP service account keys ────────────────────────────────────
+*firebase-adminsdk*.json
+*service-account*.json
+*serviceaccount*.json
+*-credentials.json
+*-key.json
+
+# ─── Python caches & virtual envs ────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+.eggs/
+
+# ─── Test suite (not needed in production image) ─────────────────────────────
+tests/
+
+# ─── Dev scripts ─────────────────────────────────────────────────────────────
+run.ps1
+setup.ps1
+
+# ─── Runtime data ────────────────────────────────────────────────────────────
+*.log
+*.parquet
+.aegis/
+
+# ─── OS / editor noise ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import billing, chat, pipeline, saved_pipelines, upload, webhooks
+from app.api import billing, chat, pipeline, saved_pipelines, upload, waitlist, webhooks
 from app.config import CORS_ORIGIN, FIREBASE_STORAGE_BUCKET
 from app.logging_config import setup_logging
 from app.middleware.auth import get_current_user
@@ -171,6 +171,7 @@ app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
 app.include_router(saved_pipelines.router, prefix="/api", tags=["saved_pipelines"])
 app.include_router(webhooks.router, prefix="/api", tags=["webhooks"])
 app.include_router(billing.router, prefix="/api", tags=["billing"])
+app.include_router(waitlist.router, prefix="/api", tags=["waitlist"])
 
 
 

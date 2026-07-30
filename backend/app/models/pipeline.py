@@ -2,21 +2,7 @@ from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
-StepType = Literal[
-    "filter",
-    "select_columns",
-    "rename",
-    "fill_na",
-    "cast_type",
-    "groupby_agg",
-    "sort",
-    "deduplicate",
-    "compute_column",
-    "visualize",
-    "compare_groups",
-    "correlation",
-]
-
+StepType = str
 FilterOp = Literal["eq", "neq", "gt", "gte", "lt", "lte", "contains", "is_null", "not_null", "between"]
 AggFunc = Literal["sum", "count", "mean", "min", "max"]
 ChartType = Literal["bar", "line", "scatter", "pie", "histogram", "heatmap", "box"]
@@ -29,17 +15,17 @@ class NodePosition(BaseModel):
 
 
 class FilterParams(BaseModel):
-    column: str
+    column: str = ""
     op: FilterOp = "eq"
     value: Any = None
 
 
 class SelectColumnsParams(BaseModel):
-    columns: list[str]
+    columns: list[str] = Field(default_factory=list)
 
 
 class RenameParams(BaseModel):
-    mapping: dict[str, str]
+    mapping: dict[str, str] = Field(default_factory=dict)
 
 
 class FillNaParams(BaseModel):
@@ -48,17 +34,17 @@ class FillNaParams(BaseModel):
 
 
 class CastTypeParams(BaseModel):
-    column: str
+    column: str = ""
     dtype: CastDtype = "str"
 
 
 class GroupByParams(BaseModel):
     group_by: list[str] = Field(default_factory=list)
-    aggregations: dict[str, Any]  # values may be AggFunc strings or {"column": ..., "func": ...} dicts
+    aggregations: dict[str, Any] = Field(default_factory=dict)  # values may be AggFunc strings or {"column": ..., "func": ...} dicts
 
 
 class SortParams(BaseModel):
-    columns: list[str]
+    columns: list[str] = Field(default_factory=list)
     ascending: bool = True
 
 
@@ -67,8 +53,8 @@ class DeduplicateParams(BaseModel):
 
 
 class ComputeColumnParams(BaseModel):
-    name: str
-    expression: str
+    name: str = ""
+    expression: str = ""
 
 
 class VisualizeParams(BaseModel):
@@ -80,14 +66,14 @@ class VisualizeParams(BaseModel):
 
 
 class CompareGroupsParams(BaseModel):
-    group_by: str
-    columns: list[str]
+    group_by: str = ""
+    columns: list[str] = Field(default_factory=list)
     alpha: float = 0.05
 
 
 class CorrelationParams(BaseModel):
-    x: str
-    y: str
+    x: str = ""
+    y: str = ""
     method: Literal["pearson", "spearman"] = "pearson"
 
 
@@ -219,9 +205,9 @@ PARAM_MODELS: dict[str, type[BaseModel]] = {
 
 
 class PipelineStep(BaseModel):
-    id: str
-    type: StepType
-    label: str
+    id: str = Field(default_factory=lambda: "step_default")
+    type: StepType = "filter"
+    label: str = "Step"
     params: dict[str, Any] = Field(default_factory=dict)
     position: NodePosition = Field(default_factory=NodePosition)
 
@@ -229,14 +215,17 @@ class PipelineStep(BaseModel):
     def validate_params(self) -> "PipelineStep":
         model_cls = PARAM_MODELS.get(self.type)
         if model_cls:
-            validated = model_cls.model_validate(self.params)
-            self.params = validated.model_dump()
+            try:
+                validated = model_cls.model_validate(self.params)
+                self.params = validated.model_dump()
+            except Exception as e:
+                logger.warning("Validation fallback for step %s (%s): %s", getattr(self, "id", "unknown"), self.type, e)
         return self
 
 
 class PipelineEdge(BaseModel):
-    source: str
-    target: str
+    source: str = ""
+    target: str = ""
 
 
 class PipelinePlan(BaseModel):

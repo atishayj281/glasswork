@@ -10,6 +10,7 @@ except ImportError:
 
 
 from app.billing.tiers import TierName, get_tier_config
+from app.config import CORS_ORIGIN
 from app.middleware.auth import get_current_user
 from app.services.user_store import user_store
 
@@ -180,7 +181,7 @@ async def create_checkout_session(
                 detail=f"Stripe Customer creation failed: {e}",
             ) from e
 
-    frontend_base = os.getenv("CORS_ORIGIN", "http://localhost:5173")
+    frontend_base = CORS_ORIGIN
     default_success = f"{frontend_base}/billing?session_id={{CHECKOUT_SESSION_ID}}&status=success"
     default_cancel = f"{frontend_base}/pricing?status=cancelled"
 
@@ -221,7 +222,7 @@ async def create_portal_session(uid: str = Depends(get_current_user)):
             detail="No active Stripe customer found for your account.",
         )
 
-    frontend_base = os.getenv("CORS_ORIGIN", "http://localhost:5173")
+    frontend_base = CORS_ORIGIN
     return_url = f"{frontend_base}/billing"
 
     try:

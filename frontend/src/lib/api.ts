@@ -237,3 +237,13 @@ export async function getSessionProfile(sessionId: string): Promise<import("../t
   const { data } = await api.get<import("../types").DatasetProfile>(`/session/${sessionId}/profile`);
   return data;
 }
+
+// ── Waitlist ─────────────────────────────────────────────────────────────────
+export async function submitWaitlistEmail(email: string, source: string = "pricing_page") {
+  const { data } = await api.post<{ status: string; message: string; email: string }>("/waitlist", {
+    email,
+    source,
+  });
+  return data;
+}
+
