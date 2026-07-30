@@ -78,7 +78,7 @@ export default function BillingPage({
           </button>
           <div className="flex items-center gap-3">
             <Button variant="secondary" size="sm" onClick={onNavigatePricing}>
-              View All Plans & Features
+              View Upcoming Plans
             </Button>
           </div>
         </div>
@@ -89,7 +89,7 @@ export default function BillingPage({
             Subscription & Usage
           </h1>
           <p className="text-slate-400 text-sm font-mono mt-1">
-            Manage your plan, check usage quotas, and manage billing details via Stripe.
+            Check your current usage quotas and plan features.
           </p>
         </div>
 
@@ -124,7 +124,7 @@ export default function BillingPage({
           <div className="flex items-center gap-3">
             {tier === "explorer" ? (
               <Button variant="primary" onClick={onNavigatePricing} id="upgrade-plan-btn">
-                Upgrade Plan
+                Paid Plans Launching Soon 🚀
               </Button>
             ) : (
               <Button variant="secondary" onClick={onOpenPortal} id="manage-stripe-btn">

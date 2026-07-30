@@ -35,20 +35,28 @@ interface Props {
 }
 
 function planToFlow(plan: PipelinePlan): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = plan.steps.map((step) => ({
-    id: step.id,
-    type: "stepNode",
-    position: step.position,
-    data: { step },
-  }));
-  const edges: Edge[] = plan.edges.map((e, i) => ({
+  const steps = plan?.steps || [];
+  const edges = plan?.edges || [];
+  const nodes: Node[] = steps.map((step, idx) => {
+    const pos =
+      step.position && typeof step.position.x === "number" && typeof step.position.y === "number"
+        ? step.position
+        : { x: 100, y: idx * 120 };
+    return {
+      id: step.id || `step_${idx}`,
+      type: "stepNode",
+      position: pos,
+      data: { step: { ...step, position: pos } },
+    };
+  });
+  const flowEdges: Edge[] = edges.map((e, i) => ({
     id: `e-${i}`,
     source: e.source,
     target: e.target,
     animated: true,
     style: { stroke: "#22d3ee", strokeWidth: 2 },
   }));
-  return { nodes, edges };
+  return { nodes, edges: flowEdges };
 }
 
 function flowToPlan(
@@ -89,12 +97,14 @@ export default function PipelineCanvas({ sessionId, refreshKey, onExecuted, onPi
     try {
       const plan = await getPipeline(sessionId);
       if (plan) {
-        setPlanName(plan.name);
+        setPlanName(plan.name || "Untitled Pipeline");
         const { nodes: n, edges: e } = planToFlow(plan);
         setNodes(n);
         setEdges(e);
         onPipelineChange?.(plan);
       }
+    } catch (err) {
+      console.error("Error loading pipeline for session:", err);
     } finally {
       setLoadingPipeline(false);
     }

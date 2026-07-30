@@ -164,13 +164,11 @@ export default function App() {
     setLoadingPipeline(true);
     try {
       await updatePipeline(sessionId, plan);
-      setCurrentPipeline(plan);
-      setPipelineRefresh((k) => k + 1);
-    } catch {
-      /* user can still see the pipeline visually */
-      setCurrentPipeline(plan);
-      setPipelineRefresh((k) => k + 1);
+    } catch (err: unknown) {
+      console.error("Failed to persist loaded pipeline to session backend:", err);
     } finally {
+      setCurrentPipeline(plan);
+      setPipelineRefresh((k) => k + 1);
       setLoadingPipeline(false);
     }
   };

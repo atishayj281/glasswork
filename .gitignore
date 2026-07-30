@@ -19,3 +19,5 @@ frontend/dist/
 *serviceaccount*.json
 *-credentials.json
 *-key.json
+.vercel
+.env*
