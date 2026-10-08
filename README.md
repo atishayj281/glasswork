@@ -2,6 +2,12 @@
 
 An agentic data analysis platform that accepts CSV/Excel uploads, analyzes dataset metadata (headers only - no raw row data sent to the LLM), converses with users to understand their goals, generates editable data processing pipelines, and renders insights with interactive visualizations.
 
+## 🎥 Project Demo
+
+[![Project Demo](https://img.youtube.com/vi/khJ0D1FrWKY/maxresdefault.jpg)](https://www.youtube.com/watch?v=khJ0D1FrWKY)
+
+> Click the thumbnail above to watch the complete project demonstration.
+
 ## Features
 
 - **Privacy-first analysis** - The AI agent only sees column names, types, null rates, and row counts
