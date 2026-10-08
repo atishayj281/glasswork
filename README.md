@@ -1,17 +1,17 @@
-# Glasswork — Agentic Data Platform
+# Glasswork - Agentic Data Platform
 
-An agentic data analysis platform that accepts CSV/Excel uploads, analyzes dataset metadata (headers only — no raw row data sent to the LLM), converses with users to understand their goals, generates editable data processing pipelines, and renders insights with interactive visualizations.
+An agentic data analysis platform that accepts CSV/Excel uploads, analyzes dataset metadata (headers only - no raw row data sent to the LLM), converses with users to understand their goals, generates editable data processing pipelines, and renders insights with interactive visualizations.
 
 ## Features
 
-- **Privacy-first analysis** — The AI agent only sees column names, types, null rates, and row counts
-- **Conversational intent gathering** — Chat with the agent to describe what you want to analyze
-- **Visual pipeline editor** — React Flow canvas with drag-and-drop, editable step parameters
-- **10 pipeline operations** — filter, groupby, sort, visualize, and more
-- **Persistent Saved Webhooks** — Save pipelines and trigger them via external tools (n8n, Zapier, cron) against fresh data files
-- **Execution transparency** — Step-by-step logs showing row counts at each stage
-- **Interactive charts** — Plotly-powered bar, line, scatter, pie, histogram, and heatmap charts
-- **Provider-agnostic LLM** — Switch models via LiteLLM (OpenAI, Anthropic, Ollama, etc.)
+- **Privacy-first analysis** - The AI agent only sees column names, types, null rates, and row counts
+- **Conversational intent gathering** - Chat with the agent to describe what you want to analyze
+- **Visual pipeline editor** - React Flow canvas with drag-and-drop, editable step parameters
+- **10 pipeline operations** - filter, groupby, sort, visualize, and more
+- **Persistent Saved Webhooks** - Save pipelines and trigger them via external tools (n8n, Zapier, cron) against fresh data files
+- **Execution transparency** - Step-by-step logs showing row counts at each stage
+- **Interactive charts** - Plotly-powered bar, line, scatter, pie, histogram, and heatmap charts
+- **Provider-agnostic LLM** - Switch models via LiteLLM (OpenAI, Anthropic, Ollama, etc.)
 
 ## Architecture
 
@@ -46,7 +46,7 @@ cd backend
 # Copy and edit env
 cp .env.example .env
 
-# Run (always uses .venv — not global Python)
+# Run (always uses .venv - not global Python)
 .\run.ps1
 ```
 
@@ -86,9 +86,9 @@ docker compose up --build
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LITELLM_MODEL` | `gpt-4o` | LLM model (e.g. `claude-3-5-sonnet`, `ollama/llama3`) |
-| `OPENAI_API_KEY` | — | OpenAI API key |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key |
-| `OLLAMA_API_BASE` | — | Ollama server URL for local models |
+| `OPENAI_API_KEY` | - | OpenAI API key |
+| `ANTHROPIC_API_KEY` | - | Anthropic API key |
+| `OLLAMA_API_BASE` | - | Ollama server URL for local models |
 | `MAX_UPLOAD_MB` | `50` | Max file upload size |
 | `SESSION_TTL_HOURS` | `24` | Session expiry |
 | `CORS_ORIGIN` | `http://localhost:5173` | Allowed frontend origin |
@@ -96,12 +96,12 @@ docker compose up --build
 ## Usage Flow
 
 1. **Upload** a CSV or Excel file
-2. **Chat** with the agent — describe what insights you need
-3. **Generate Pipeline** — the agent creates a visual processing DAG
-4. **Edit** — click any node to modify parameters, add/remove steps
-5. **Run** — execute the pipeline and view charts, data preview, and step logs
-6. **Save as Webhook** — make the pipeline persistent and triggerable via external tools
-7. **Iterate** — ask the agent to revise, edit the pipeline, and re-run
+2. **Chat** with the agent - describe what insights you need
+3. **Generate Pipeline** - the agent creates a visual processing DAG
+4. **Edit** - click any node to modify parameters, add/remove steps
+5. **Run** - execute the pipeline and view charts, data preview, and step logs
+6. **Save as Webhook** - make the pipeline persistent and triggerable via external tools
+7. **Iterate** - ask the agent to revise, edit the pipeline, and re-run
 
 ## Saved Pipelines & Webhooks
 
@@ -150,7 +150,7 @@ For full setup guides, n8n HTTP Request node configuration details, and JSON res
 
 ## Security
 
-- Pipeline DSL uses a whitelist of operations — no arbitrary code execution
+- Pipeline DSL uses a whitelist of operations - no arbitrary code execution
 - `compute_column` uses pandas `eval` with restricted scope
 - Raw data never sent to the LLM
 - Webhook secret verification uses constant-time string comparison (`secrets.compare_digest`) with SHA-256 server-side secret hashing
